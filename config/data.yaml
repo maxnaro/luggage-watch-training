@@ -3,7 +3,5 @@ train: train/images
 val: valid/images
 test: test/images
 
-# Class names (example placeholder)
-names:
-  0: suspicious_bag
-  1: unattended_item
+nc: 2
+names: ['bag', 'person']
