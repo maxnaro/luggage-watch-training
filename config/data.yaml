@@ -1,0 +1,9 @@
+# Update these paths to your dataset locations (images + YOLO-format labels)
+path: ./datasets  # or an absolute path or symlink target
+train: images/train
+val: images/val
+
+# Class names (example placeholder)
+names:
+  0: suspicious_bag
+  1: unattended_item
