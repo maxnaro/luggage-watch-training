@@ -1,7 +1,7 @@
-# Update these paths to your dataset locations (images + YOLO-format labels)
-path: ./datasets  # or an absolute path or symlink target
-train: images/train
-val: images/val
+path: dataset
+train: train/images
+val: valid/images
+test: test/images
 
 # Class names (example placeholder)
 names:

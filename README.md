@@ -24,9 +24,19 @@ python scripts/train.py \
   --imgsz 640 \
   --epochs 100 \
   --batch 16 \
-  --data configs/data.yaml \
+  --data config/data.yaml \
   --project runs \
   --name y8n-baseline
+```
+
+### Fix: GPU is not being utilised in training
+
+```bash
+source .venv\Scripts\activate
+pip uninstall -y torch torchvision torchaudio
+
+# Install CUDA 12.1 build (includes CUDA runtime; no separate toolkit needed)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 ```
 
 ## Export to ONNX (for DeepStream/TensorRT)

@@ -1,4 +1,5 @@
 import argparse
+import shutil
 from ultralytics import YOLO
 
 def main():
@@ -12,15 +13,16 @@ def main():
     args = ap.parse_args()
 
     model = YOLO(args.weights)
-    model.export(
+    path = model.export(
         format="onnx",
         imgsz=args.imgsz,
         opset=args.opset,
         simplify=args.simplify,
         dynamic=args.dynamic,
         save=True,
-        export_path=args.out,
     )
+    
+    shutil.move(path, args.out)
 
 if __name__ == "__main__":
     main()
