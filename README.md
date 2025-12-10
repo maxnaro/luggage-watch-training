@@ -1,56 +1,90 @@
-# Luggage Watch Training
+# Luggage Watch Training (Docker)
 
-Training and export pipeline for YOLO-based suspicious-luggage detection.
+Training and export pipeline for YOLO-based suspicious luggage detection using Docker.
 
-## Quickstart (WSL or Linux)
+## Prerequisites
+
+- **Docker Desktop** (Windows) or **Docker Engine** (Linux)
+- **NVIDIA GPU** with correctly installed drivers
+- **WSL 2** (if on Windows)
+
+*If on Windows,* run the `setup.ps1` script from the luggage-watch repository (`/luggage-watch/helpers/setup.ps1`) to sort the prerequisites out for you.
+
+## 1. Build the Docker Image
+
+Run this command from the directory containing the `Dockerfile`:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
+docker build -t luggage-watch-training .
 ```
 
-## Data
+> **Note**: The first build may take a few minutes. Subsequent builds will be faster due to caching.
 
-- Use a mounted path or symlink (e.g., `datasets/` -> `/mnt/data/luggage`).
-- `configs/data.yaml` should point to your train/val image/label folders and list class names.
+## 2. Data Setup
 
-## Training
+The container expects the dataset to be mounted at /app/data.
 
-```bash
-python scripts/train.py \
-  --model yolov8n.pt \
-  --imgsz 640 \
-  --epochs 100 \
-  --batch 16 \
-  --data config/data.yaml \
-  --project runs \
-  --name y8n-baseline
+Ensure your local dataset folder is ready.
+
+> **Important**: Check that your `config/data.yaml` file points to absolute paths (`/app/data/train`, `/app/data/val`) or relative paths that resolve correctly inside the container.
+
+## 3. Training
+
+Run the training container by mounting your local dataset folder and a local runs folder (to save results).
+
+**PowerShell** (Windows):
+
+```PowerShell
+docker run --gpus all --ipc=host -it `
+  -v "C:\Path\To\Your\Dataset:/app/data" `
+  -v "${PWD}\runs:/app/runs" `
+  luggage-watch-training
 ```
 
-### Fix: GPU is not being utilised in training
+**Bash** (Linux/WSL):
 
-```bash
-source .venv\Scripts\activate
-pip uninstall -y torch torchvision torchaudio
-
-# Install CUDA 12.1 build (includes CUDA runtime; no separate toolkit needed)
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```Bash
+docker run --gpus all --ipc=host -it \
+  -v /path/to/dataset:/app/data \
+  -v $(pwd)/runs:/app/runs \
+  luggage-watch-training
 ```
 
-## Export to ONNX (for DeepStream/TensorRT)
+### Passing Arguments
 
-```bash
-python scripts/export.py \
-  --weights runs/train/y8n-baseline/weights/best.pt \
-  --imgsz 640 \
-  --opset 12 \
-  --simplify \
-  --out model/yolov8n.onnx
+The container runs source/train.py by default. You can append arguments to the end of the command to override defaults defined in the Dockerfile:
+
+```Bash
+# Example: Overriding epochs and batch size
+... luggage-watch-training --epochs 50 --batch 32
+```
+
+## 4. Export to ONNX (for Jetson/TensorRT)
+
+To export the trained model, override the container's entrypoint to run the export script. This ensures the export happens in the exact same environment as the training.
+
+**PowerShell** (Windows):
+
+```PowerShell
+docker run --rm --gpus all `
+  -v "${PWD}\runs:/app/runs" `
+  --entrypoint python3 `
+  luggage-watch-training `
+  /app/source/export.py --weights /app/runs/exp/weights/best.pt --format onnx
+```
+
+**Bash** (Linux/WSL):
+
+```Bash
+docker run --rm --gpus all \
+  -v $(pwd)/runs:/app/runs \
+  --entrypoint python3 \
+  luggage-watch-training \
+  /app/source/export.py --weights /app/runs/exp/weights/best.pt --format onnx
 ```
 
 ## Notes
 
-- Engines (`*.engine`) and checkpoints (`*.pt`, `*.ckpt`) should not be committed. See `.gitignore`.
-- Build TensorRT engines on the target device (e.g., Jetson Orin Nano) for compatibility.
+**TensorRT Engines**: Do not generate .engine files inside this container. Export to ONNX here, then copy the .onnx file to the target device (e.g., Jetson Orin Nano) and compile the engine there to ensure hardware compatibility.
+
+**Persistence**: Always mount the runs volume. Any data saved inside the container (like trained weights) will be lost when the container stops if it is not mounted to a local folder.
