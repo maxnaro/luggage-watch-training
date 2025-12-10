@@ -150,5 +150,58 @@ Use the same `config.json` (export block shown above):
 
 ## Notes
 
+- WSL memory limits (Windows): if training fails unexpectedly, ensure WSL has enough RAM.
+  - Create or edit `%UserProfile%\.wslconfig` (example):
+    ```ini
+    [wsl2]
+    memory=12GB  # adjust to available RAM
+    processors=4 # optional
+    swap=8GB     # optional; can be 0 to disable swap
+    ```
+  - Apply changes: close all WSL sessions, then run `wsl --shutdown` in PowerShell.
+  - Reopen your WSL distro and rerun training; verify with `free -h` inside WSL.
 - TensorRT engines: build ONNX here, then compile `.engine` on the target device (e.g., Jetson Orin Nano) to match hardware.
 - Persistence: always mount `runs` (and `model` if exporting). Anything left inside the container is lost when it stops.
+
+## Non-Docker setup (not recommended)
+
+If you must run locally without Docker, create a virtual environment and install deps (WSL/Linux example):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+Train directly:
+
+```bash
+python source/train.py \
+  --model yolov8n.pt \
+  --imgsz 640 \
+  --epochs 100 \
+  --batch 16 \
+  --data config/data.yaml \
+  --project runs \
+  --name y8n-baseline
+```
+
+If GPU is not used, install the CUDA 12.1 PyTorch build:
+
+```bash
+source .venv/bin/activate
+pip uninstall -y torch torchvision torchaudio
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
+Export to ONNX locally:
+
+```bash
+python source/export.py \
+  --weights runs/train/y8n-baseline/weights/best.pt \
+  --imgsz 640 \
+  --opset 12 \
+  --simplify \
+  --out model/yolov8n.onnx
+```
