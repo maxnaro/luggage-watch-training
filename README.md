@@ -2,70 +2,121 @@
 
 Training and export pipeline for YOLO-based suspicious luggage detection using Docker.
 
+## Quick Start (Windows)
+
+Run everything (build + train + export) with the helper script:
+
+```powershell
+.\source\helpers\run.ps1 -b -t -e -c .\source\helpers\config.json
+```
+
 ## Prerequisites
 
-- **Docker Desktop** (Windows) or **Docker Engine** (Linux)
-- **NVIDIA GPU** with correctly installed drivers
-- **WSL 2** (if on Windows)
+- Docker Desktop (Windows) or Docker Engine (Linux)
+- NVIDIA GPU with drivers and CUDA runtime
+- WSL 2 for Windows
+- (Windows) Optional: run `/luggage-watch/helpers/setup.ps1` from the main repo to install prerequisites automatically.
 
-*If on Windows,* run the `setup.ps1` script from the luggage-watch repository (`/luggage-watch/helpers/setup.ps1`) to sort the prerequisites out for you.
+## Data Layout
 
-## 1. Build the Docker Image
+- Container expects data at `/app/data` and outputs runs to `/app/runs`.
+- Ensure `config/data.yaml` points to `/app/data/train` and `/app/data/val` (absolute inside the container).
 
-Run this command from the directory containing the `Dockerfile`:
+### Windows volume option
+
+Mounting Windows folders to Linux containers can be slow. To avoid the I/O bottleneck, create a Docker volume that holds your dataset:
+
+```powershell
+.\source\helpers\create_docker_volume.ps1 -v luggage-watch-data -p "C:\path\to\your\dataset"
+```
+
+Use the volume name (`luggage-watch-data`) when mounting to `/app/data`.
+
+## Build the image
+
+From the repo root (where the Dockerfile lives):
 
 ```bash
 docker build -t luggage-watch-training .
 ```
 
-> **Note**: The first build may take a few minutes. Subsequent builds will be faster due to caching.
+Or via the helper script (Windows):
 
-## 2. Data Setup
+```powershell
+.\source\helpers\run.ps1 -b
+```
 
-The container expects the dataset to be mounted at /app/data.
+> First build may take a few minutes; subsequent builds are cached.
 
-Ensure your local dataset folder is ready.
+## Train
 
-> **Important**: Check that your `config/data.yaml` file points to absolute paths (`/app/data/train`, `/app/data/val`) or relative paths that resolve correctly inside the container.
+Mount local data (or volume) and a local `runs` directory so results persist.
 
-## 3. Training
+**PowerShell (Windows):**
 
-Run the training container by mounting your local dataset folder and a local runs folder (to save results).
-
-**PowerShell** (Windows):
-
-```PowerShell
+```powershell
 docker run --gpus all --ipc=host -it `
   -v "C:\Path\To\Your\Dataset:/app/data" `
   -v "${PWD}\runs:/app/runs" `
   luggage-watch-training
 ```
 
-**Bash** (Linux/WSL):
+**Bash (Linux/WSL):**
 
-```Bash
+```bash
 docker run --gpus all --ipc=host -it \
   -v /path/to/dataset:/app/data \
   -v $(pwd)/runs:/app/runs \
   luggage-watch-training
 ```
 
-### Passing Arguments
+Append training args to override defaults in `source/train.py` (example):
 
-The container runs source/train.py by default. You can append arguments to the end of the command to override defaults defined in the Dockerfile:
-
-```Bash
-# Example: Overriding epochs and batch size
+```bash
 ... luggage-watch-training --epochs 50 --batch 32
 ```
 
-## 4. Export to ONNX (for Jetson/TensorRT)
+### Train via helper script (Windows)
 
-To export the trained model, override the container's entrypoint to run the export script. This ensures the export happens in the exact same environment as the training.
+`run.ps1` reads settings from `source/helpers/config.json`:
 
-**PowerShell** (Windows):
+```json
+{
+  "projectName": "luggage-watch-training",
+  "paths": {
+    "data": "luggage-watch-data",
+    "runs": "runs",
+    "model": "model"
+  },
+  "train": {
+    "model": "yolo11s.pt",
+    "epochs": 100,
+    "batch": 16,
+    "imgsz": 640,
+    "device": "0",
+    "name": "yolo11s_101225"
+  },
+  "export": {
+    "opset": 12,
+    "simplify": true,
+    "out": "/app/model/yolo11s_101225.onnx"
+  }
+}
+```
 
-```PowerShell
+Start training:
+
+```powershell
+.\source\helpers\run.ps1 -t -c .\source\helpers\config.json
+```
+
+## Export to ONNX (Jetson/TensorRT)
+
+Run the export script inside the same container environment:
+
+**PowerShell (Windows):**
+
+```powershell
 docker run --rm --gpus all `
   -v "${PWD}\runs:/app/runs" `
   --entrypoint python3 `
@@ -73,9 +124,9 @@ docker run --rm --gpus all `
   /app/source/export.py --weights /app/runs/exp/weights/best.pt --format onnx
 ```
 
-**Bash** (Linux/WSL):
+**Bash (Linux/WSL):**
 
-```Bash
+```bash
 docker run --rm --gpus all \
   -v $(pwd)/runs:/app/runs \
   --entrypoint python3 \
@@ -83,8 +134,21 @@ docker run --rm --gpus all \
   /app/source/export.py --weights /app/runs/exp/weights/best.pt --format onnx
 ```
 
+### Export via helper script (Windows)
+
+Use the same `config.json` (export block shown above):
+
+```powershell
+.\source\helpers\run.ps1 -e -c .\source\helpers\config.json
+```
+
+## Full workflow with helper script (Windows)
+
+```powershell
+.\source\helpers\run.ps1 -b -t -e -c .\source\helpers\config.json
+```
+
 ## Notes
 
-**TensorRT Engines**: Do not generate .engine files inside this container. Export to ONNX here, then copy the .onnx file to the target device (e.g., Jetson Orin Nano) and compile the engine there to ensure hardware compatibility.
-
-**Persistence**: Always mount the runs volume. Any data saved inside the container (like trained weights) will be lost when the container stops if it is not mounted to a local folder.
+- TensorRT engines: build ONNX here, then compile `.engine` on the target device (e.g., Jetson Orin Nano) to match hardware.
+- Persistence: always mount `runs` (and `model` if exporting). Anything left inside the container is lost when it stops.
