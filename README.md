@@ -1,4 +1,4 @@
-# Luggage Watch Training (Docker)
+# Luggage Watch Training
 
 Training and export pipeline for YOLO-based suspicious luggage detection using Docker.
 
