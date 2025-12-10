@@ -1,0 +1,21 @@
+{
+    "projectName": "luggage-watch-training",
+    "paths": {
+        "data": "luggage-watch-data",
+        "runs": "runs",
+        "model": "model"
+    },
+    "train": {
+        "model": "yolo11s.pt",
+        "epochs": 100,
+        "batch": 16,
+        "imgsz": 640,
+        "device": "0",
+        "name": "yolo11s_101225"
+    },
+    "export": {
+        "opset": 12,
+        "simplify": true,
+        "out": "/app/model/yolo11s_101225.onnx"
+    }
+}
