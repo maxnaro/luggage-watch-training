@@ -1,8 +1,8 @@
 from ultralytics import YOLO
 
-model = YOLO("")
+model = YOLO("C:\\source\\luggage-watch\\training\\model\\yolo11s_131225.onnx")
 results = model.predict(
-    source="",         
+    source="C:\\Users\\maxna\\Downloads\\drive-download-20251213T120438Z-3-001\\AVSS_E2.avi",         
     device=0,
     imgsz=640,
     stream=True,

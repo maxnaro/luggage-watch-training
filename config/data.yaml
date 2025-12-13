@@ -1,7 +1,0 @@
-path: data
-train: train/images
-val: valid/images
-test: test/images
-
-nc: 2
-names: ['bag', 'person']

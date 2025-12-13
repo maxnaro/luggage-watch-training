@@ -11,7 +11,7 @@ param(
     [switch]$Build,
     [switch]$Train,
     [switch]$Export,
-    [string]$ConfigFile = "config.json",
+    [string]$ConfigFile = "./source/helpers/config.json",
     [switch]$Help
 )
 
@@ -25,7 +25,7 @@ if ($Help -or (-not $Build -and -not $Train -and -not $Export)) {
     Write-Host "  -Build        Build the Docker image."
     Write-Host "  -Train        Run training using settings from config file."
     Write-Host "  -Export       Export model using settings from config file."
-    Write-Host "  -ConfigFile   Path to JSON config (Default: config.json)."
+    Write-Host "  -ConfigFile   Path to JSON config (Default: ./source/helpers/config.json)."
     exit
 }
 
@@ -52,8 +52,6 @@ if ($Train) {
 
     # Construct Training Arguments dynamically from JSON
     $TrainArgs = @()
-    # Always include data config location (inside container)
-    $TrainArgs += "--data", "config/data.yaml"
     
     # Add other keys from the 'train' section of config
     foreach ($key in $Config.train.PSObject.Properties.Name) {
@@ -63,6 +61,7 @@ if ($Train) {
 
     # Convert array to string for display purposes
     Write-Host "Arguments: $TrainArgs" -ForegroundColor DarkGray
+    Write-Host "Mounted volume: $($Config.paths.data)" -ForegroundColor DarkGray
 
     # Run Docker
     docker run --gpus all --ipc=host -it `
