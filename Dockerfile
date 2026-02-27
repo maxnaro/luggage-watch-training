@@ -16,14 +16,14 @@ COPY requirements.txt /app/requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
 
-# Copy everything inside the 'training' submodule to /app
-COPY . /app
+# Copy source code
+COPY source/ /app/source/
 
-# Dataset mounting point
-VOLUME /app/data
+# Mount points (data, runs, model, config)
+VOLUME ["/app/data", "/app/runs", "/app/model"]
 
-# Entry point
-ENTRYPOINT ["python3", "source/train.py"]
+# Unified entrypoint — pass "train" or "export" as the command
+ENTRYPOINT ["python3", "source/entrypoint.py"]
 
-# Default arguments
-CMD ["--data", "config/data.yaml", "--model", "yolo11n.pt", "--imgsz", "640", "--epochs", "100", "--batch", "16", "--project", "runs", "--name", "exp", "--device", ""]
+# Default to training
+CMD ["train"]

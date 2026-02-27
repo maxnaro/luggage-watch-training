@@ -1,6 +1,7 @@
 import argparse
 from ultralytics import YOLO
 
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="yolo11n.pt", help="Base model checkpoint")
@@ -23,6 +24,7 @@ def main():
         name=args.name,
         device=args.device,
     )
+
 
 if __name__ == "__main__":
     main()
