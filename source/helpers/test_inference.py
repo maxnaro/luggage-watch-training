@@ -235,8 +235,14 @@ def draw_overlays(
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
         cv2.rectangle(frame, (x1, y1 - th - 8), (x1 + tw + 4, y1), colour, -1)
         cv2.putText(
-            frame, label, (x1 + 2, y1 - 4),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA,
+            frame,
+            label,
+            (x1 + 2, y1 - 4),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
         )
 
 
@@ -249,7 +255,14 @@ def resolve_class_ids(model: YOLO) -> tuple[set[int], set[int]]:
     Handles both COCO-pretrained and custom fine-tuned label sets.
     """
     person_keywords = {"person", "people", "pedestrian"}
-    luggage_keywords = {"luggage", "bag", "suitcase", "backpack", "handbag", "briefcase"}
+    luggage_keywords = {
+        "luggage",
+        "bag",
+        "suitcase",
+        "backpack",
+        "handbag",
+        "briefcase",
+    }
 
     person_ids: set[int] = set()
     luggage_ids: set[int] = set()
@@ -275,17 +288,31 @@ def resolve_class_ids(model: YOLO) -> tuple[set[int], set[int]]:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Test inference with abandonment logic")
     ap.add_argument("--weights", default=DEFAULT_WEIGHTS, help="Path to .pt weights")
-    ap.add_argument("--source", default=DEFAULT_SOURCE, help="Video file or camera index")
+    ap.add_argument(
+        "--source", default=DEFAULT_SOURCE, help="Video file or camera index"
+    )
     ap.add_argument("--tracker", default=DEFAULT_TRACKER, help="Tracker config YAML")
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--conf", type=float, default=0.25)
     ap.add_argument("--device", default="0")
-    ap.add_argument("--radius", type=float, default=DEFAULT_OWNERSHIP_RADIUS,
-                    help="Max pixel distance for ownership association")
-    ap.add_argument("--abandon-time", type=float, default=DEFAULT_ABANDON_THRESHOLD,
-                    help="Seconds before unattended luggage becomes abandoned")
-    ap.add_argument("--stationary-thresh", type=float, default=DEFAULT_STATIONARY_THRESHOLD,
-                    help="Max centre drift (px) to count as stationary")
+    ap.add_argument(
+        "--radius",
+        type=float,
+        default=DEFAULT_OWNERSHIP_RADIUS,
+        help="Max pixel distance for ownership association",
+    )
+    ap.add_argument(
+        "--abandon-time",
+        type=float,
+        default=DEFAULT_ABANDON_THRESHOLD,
+        help="Seconds before unattended luggage becomes abandoned",
+    )
+    ap.add_argument(
+        "--stationary-thresh",
+        type=float,
+        default=DEFAULT_STATIONARY_THRESHOLD,
+        help="Max centre drift (px) to count as stationary",
+    )
     ap.add_argument("--no-show", action="store_true", help="Disable cv2 display window")
     args = ap.parse_args()
 
