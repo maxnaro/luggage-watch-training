@@ -2,6 +2,7 @@ import argparse
 import shutil
 from ultralytics import YOLO
 
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--weights", required=True, help="Path to trained .pt weights")
@@ -21,8 +22,9 @@ def main():
         dynamic=args.dynamic,
         save=True,
     )
-    
+
     shutil.move(path, args.out)
+
 
 if __name__ == "__main__":
     main()

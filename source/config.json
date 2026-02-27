@@ -1,22 +1,22 @@
 {
     "projectName": "luggage-watch-training",
     "paths": {
-        "data": "aboda-2",
+        "data": "my-dataset",
         "runs": "runs",
         "model": "model"
     },
     "train": {
         "data": "/app/data/data.yaml",
-        "model": "yolo11m.pt",
+        "model": "yolo11n.pt",
         "epochs": 100,
         "batch": 16,
         "imgsz": 640,
         "device": "0",
-        "name": "yolo11m_131225"
+        "name": "yolo11n_20260227"
     },
     "export": {
         "opset": 12,
         "simplify": true,
-        "out": "/app/model/yolo11m_131225.onnx"
+        "out": "/app/model/model.onnx"
     }
 }
