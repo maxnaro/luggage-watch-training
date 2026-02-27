@@ -9,14 +9,31 @@
         "data": "/app/data/data.yaml",
         "model": "yolo11n.pt",
         "epochs": 100,
+        "patience": 50,
         "batch": 16,
         "imgsz": 640,
+        "optimizer": "auto",
+        "lr0": 0.01,
+        "workers": 8,
+        "cache": false,
+        "seed": 0,
+        "resume": false,
+        "exist_ok": false,
+        "save_period": -1,
+        "close_mosaic": 10,
         "device": "0",
+        "project": "runs",
         "name": "yolo11n_20260227"
     },
     "export": {
+        "format": "onnx",
+        "imgsz": 640,
         "opset": 12,
         "simplify": true,
+        "dynamic": false,
+        "half": false,
+        "int8": false,
+        "batch": 1,
         "out": "/app/model/model.onnx"
     }
 }
