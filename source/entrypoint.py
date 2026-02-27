@@ -43,7 +43,17 @@ def run_train(config: dict) -> None:
         "data": "/app/data/data.yaml",
         "imgsz": 640,
         "epochs": 100,
+        "patience": 50,
         "batch": 16,
+        "optimizer": "auto",
+        "lr0": 0.01,
+        "workers": 8,
+        "cache": False,
+        "seed": 0,
+        "resume": False,
+        "exist_ok": False,
+        "save_period": -1,
+        "close_mosaic": 10,
         "project": "runs",
         "name": "exp",
         "device": "",
@@ -79,6 +89,9 @@ def run_export(config: dict) -> None:
         "opset": 12,
         "simplify": True,
         "dynamic": False,
+        "half": False,
+        "int8": False,
+        "batch": 1,
     }
     defaults.update(export_cfg)
 
