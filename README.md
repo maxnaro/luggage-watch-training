@@ -7,6 +7,9 @@ Everything is driven by a single **config.json** — edit it once, then tell the
 ## Quick Start
 
 ```powershell
+# 0. Start Docker Desktop
+docker desktop start
+
 # 1. Build the image
 docker build -t luggage-watch-training .
 
