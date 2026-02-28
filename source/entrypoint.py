@@ -54,7 +54,6 @@ def run_train(config: dict) -> None:
         "exist_ok": False,
         "save_period": -1,
         "close_mosaic": 10,
-        "project": "runs",
         "name": "exp",
         "device": "",
     }
@@ -74,7 +73,7 @@ def run_export(config: dict) -> None:
     if not weights:
         # Auto-resolve from training run name
         run_name = config.get("train", {}).get("name", "exp")
-        weights = f"/app/runs/{run_name}/weights/best.pt"
+        weights = f"/app/runs/detect/{run_name}/weights/best.pt"
 
     if not Path(weights).exists():
         print(f"Error: weights not found at {weights}", file=sys.stderr)
