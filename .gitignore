@@ -17,4 +17,4 @@ wandb/
 *.log
 
 # Large/local data
-datasets/
+dataset/

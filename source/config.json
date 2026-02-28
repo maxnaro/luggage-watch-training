@@ -1,39 +1,41 @@
 {
     "projectName": "luggage-watch-training",
     "paths": {
-        "data": "my-dataset",
+        "data": "luggage-watch-data-balanced",
         "runs": "runs",
         "model": "model"
     },
     "train": {
-        "data": "/app/data/data.yaml",
-        "model": "yolo11n.pt",
+        "data": "/app/data/dataset.yaml",
+        "model": "yolo26s.pt",
         "epochs": 100,
         "patience": 50,
-        "batch": 16,
-        "imgsz": 640,
-        "optimizer": "auto",
-        "lr0": 0.01,
+        "batch": 0.8,
+        "imgsz": 1280,
+        "optimizer": "AdamW", 
+        "lr0": 0.001,
+        "lrf": 0.01,
+        "warmup_epochs": 3.0,
+        "freeze": 10,
         "workers": 8,
-        "cache": false,
+        "cache": "disk",
         "seed": 0,
         "resume": false,
         "exist_ok": false,
         "save_period": -1,
         "close_mosaic": 10,
         "device": "0",
-        "project": "runs",
-        "name": "yolo11n_20260227"
+        "name": "yolo26s_1280_2702263"
     },
     "export": {
         "format": "onnx",
-        "imgsz": 640,
+        "imgsz": 1280,
         "opset": 12,
         "simplify": true,
         "dynamic": false,
         "half": false,
         "int8": false,
         "batch": 1,
-        "out": "/app/model/model.onnx"
+        "out": "/app/model/yolo26s_1280_270226.onnx"
     }
 }
