@@ -20,13 +20,8 @@ import cv2
 from ultralytics import YOLO
 
 
-# ---------------------------------------------------------------------------
 # Configuration defaults
-# ---------------------------------------------------------------------------
-DEFAULT_WEIGHTS = (
-    "C:\\source\\luggage-watch\\training\\runs\\detect\\runs"
-    "\\yolo11m_100226\\weights\\best.pt"
-)
+DEFAULT_WEIGHTS = "../../model/model.onnx"
 DEFAULT_SOURCE = "C:\\source\\AbandonObjVideo\\AVSS_E2.avi"
 DEFAULT_TRACKER = "botsort.yaml"
 DEFAULT_OWNERSHIP_RADIUS = 150  # pixels
@@ -34,9 +29,7 @@ DEFAULT_ABANDON_THRESHOLD = 30.0  # seconds
 DEFAULT_STATIONARY_THRESHOLD = 10  # pixels – max centre drift to count as stationary
 
 
-# ---------------------------------------------------------------------------
 # Domain types
-# ---------------------------------------------------------------------------
 class LuggageState(Enum):
     ATTENDED = auto()
     UNATTENDED = auto()
@@ -67,9 +60,7 @@ class Alert:
     bbox: tuple[float, float, float, float]
 
 
-# ---------------------------------------------------------------------------
 # Core helpers
-# ---------------------------------------------------------------------------
 def centre(bbox: tuple[float, float, float, float]) -> tuple[float, float]:
     """Return (cx, cy) from an (x1, y1, x2, y2) bounding box."""
     x1, y1, x2, y2 = bbox
@@ -80,9 +71,6 @@ def euclidean(a: tuple[float, float], b: tuple[float, float]) -> float:
     return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
 
 
-# ---------------------------------------------------------------------------
-# Algorithm 1 – ownership association
-# ---------------------------------------------------------------------------
 def associate_owner(
     luggage_centre: tuple[float, float],
     persons: dict[int, tuple[float, float, float, float]],
@@ -111,9 +99,6 @@ def is_owner_nearby(
     return euclidean(luggage_centre, centre(persons[owner_id])) < radius
 
 
-# ---------------------------------------------------------------------------
-# Algorithm 3 – alert generation
-# ---------------------------------------------------------------------------
 def generate_alert(lug: TrackedLuggage, now: float) -> Alert:
     """Build an Alert for an abandoned luggage item and log it."""
     loc = centre(lug.bbox)
@@ -135,9 +120,6 @@ def generate_alert(lug: TrackedLuggage, now: float) -> Alert:
     return alert
 
 
-# ---------------------------------------------------------------------------
-# Algorithm 2 – state transitions  (called once per frame)
-# ---------------------------------------------------------------------------
 def update_states(
     luggage_detections: dict[int, tuple[float, float, float, float]],
     person_detections: dict[int, tuple[float, float, float, float]],
@@ -207,9 +189,6 @@ def update_states(
                 pass
 
 
-# ---------------------------------------------------------------------------
-# Visualisation helpers
-# ---------------------------------------------------------------------------
 STATE_COLOURS = {
     LuggageState.ATTENDED: (0, 200, 0),  # green
     LuggageState.UNATTENDED: (0, 200, 255),  # orange
@@ -246,9 +225,7 @@ def draw_overlays(
         )
 
 
-# ---------------------------------------------------------------------------
 # Resolve class-name → class-id mapping from the model
-# ---------------------------------------------------------------------------
 def resolve_class_ids(model: YOLO) -> tuple[set[int], set[int]]:
     """
     Return (person_class_ids, luggage_class_ids) by inspecting model.names.
@@ -282,9 +259,7 @@ def resolve_class_ids(model: YOLO) -> tuple[set[int], set[int]]:
     return person_ids, luggage_ids
 
 
-# ---------------------------------------------------------------------------
 # Main loop
-# ---------------------------------------------------------------------------
 def main() -> None:
     ap = argparse.ArgumentParser(description="Test inference with abandonment logic")
     ap.add_argument("--weights", default=DEFAULT_WEIGHTS, help="Path to .pt weights")
