@@ -39,7 +39,7 @@ def download_split(split: str, max_samples: int | None = None) -> fo.Dataset:
         dataset_name=f"coco-2017-{split}-luggage-watch",
         label_types=["detections"],
         classes=SOURCE_CLASSES,
-        only_matching=True,  # keep only images with ≥1 target class
+        only_matching=True,  # keep only images with >=1 target class
         split=split,
     )
     if max_samples is not None:
@@ -48,6 +48,53 @@ def download_split(split: str, max_samples: int | None = None) -> fo.Dataset:
     # Load (downloads on first run, cached afterwards)
     dataset = foz.load_zoo_dataset("coco-2017", **kwargs)
     return dataset
+
+
+def oversample_classes(
+    dataset: fo.Dataset,
+    weights: dict[str, int],
+    seed: int = 42,
+) -> fo.Dataset:
+    """Duplicate samples containing specific classes to increase their
+    representation in the dataset.
+
+    Parameters
+    ----------
+    dataset : fo.Dataset
+        Dataset with original COCO labels (before remapping).
+    weights : dict[str, int]
+        Mapping of class name -> integer weight.  A weight of 3 means images
+        containing that class will appear 3* (i.e. 2 extra copies).  Classes
+        with weight <= 1 are left untouched.
+    seed : int
+        Random seed (unused currently, reserved for future stochastic sampling).
+    """
+    classes_to_boost = {c: w for c, w in weights.items() if w > 1}
+    if not classes_to_boost:
+        return dataset
+
+    boosted = dataset.clone()
+    for cls, weight in classes_to_boost.items():
+        view = boosted.match(
+            F("ground_truth.detections").filter(F("label") == cls).length() > 0
+        )
+        n_originals = len(view)
+        if n_originals == 0:
+            print(f"    ⚠ No images contain '{cls}' — skipping oversample")
+            continue
+
+        extra_copies = weight - 1
+        print(
+            f"    Oversampling '{cls}': {n_originals} images * {weight} "
+            f"(+{n_originals * extra_copies} copies)"
+        )
+        for _ in range(extra_copies):
+            for sample in view:
+                dup = sample.copy()
+                boosted.add_sample(dup)
+
+    print(f"    Dataset size after oversampling: {len(boosted)} images")
+    return boosted
 
 
 def remap_labels(dataset: fo.Dataset) -> fo.Dataset:
@@ -203,7 +250,28 @@ def main():
         default=42,
         help="Random seed for reproducible subsampling (default: 42)",
     )
+    ap.add_argument(
+        "--luggage-weights",
+        type=str,
+        default=None,
+        help=(
+            "Per-subclass oversampling weights as comma-separated key=value "
+            "pairs, e.g. 'backpack=1,handbag=3,suitcase=1'. Classes with "
+            "weight > 1 will have their images duplicated that many times."
+        ),
+    )
     args = ap.parse_args()
+
+    # Parse luggage weights
+    luggage_weights: dict[str, int] = {c: 1 for c in LUGGAGE_CLASSES}
+    if args.luggage_weights:
+        for item in args.luggage_weights.split(","):
+            key, val = item.strip().split("=")
+            key = key.strip()
+            if key not in LUGGAGE_CLASSES:
+                ap.error(f"Unknown luggage sub-class '{key}'. "
+                         f"Valid: {LUGGAGE_CLASSES}")
+            luggage_weights[key] = int(val)
 
     export_dir: Path = args.out.resolve()
     export_dir.mkdir(parents=True, exist_ok=True)
@@ -216,6 +284,11 @@ def main():
         print(f"  Downloading COCO 2017 {split} split …")
         print(f"{'='*60}")
         raw = download_split(split, max_samples=args.max_samples)
+
+        if any(w > 1 for w in luggage_weights.values()):
+            print(f"  Oversampling luggage sub-classes {luggage_weights} …")
+            raw = oversample_classes(raw, luggage_weights, seed=args.seed)
+            cloned_names.append(raw.name)
 
         print(f"  Remapping labels → {TARGET_CLASSES} …")
         mapped = remap_labels(raw)
