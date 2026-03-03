@@ -64,11 +64,13 @@ def run_train(config: dict) -> None:
 
 
 def run_export(config: dict) -> None:
-    """Export a trained model to ONNX from the 'export' section of the config."""
+    """Export a trained model to ONNX using DeepStream export script."""
+    import export as ds_export
+    
     export_cfg = config.get("export", {})
 
-    weights = export_cfg.pop("weights", None)
-    out = export_cfg.pop("out", "/app/model/model.onnx")
+    weights = export_cfg.get("weights", None)
+    out = export_cfg.get("out", "/app/model/model.onnx")
 
     if not weights:
         # Auto-resolve from training run name
@@ -79,29 +81,40 @@ def run_export(config: dict) -> None:
         print(f"Error: weights not found at {weights}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"[export] Loading weights: {weights}")
-    model = YOLO(weights)
-
-    defaults = {
-        "format": "onnx",
-        "imgsz": 640,
-        "opset": 12,
-        "simplify": True,
-        "dynamic": False,
-        "half": False,
-        "int8": False,
-        "batch": 1,
-    }
-    defaults.update(export_cfg)
-
-    print(f"[export] Parameters: {defaults}")
-    path = model.export(**defaults)
-
-    # Move to output path
-    out_path = Path(out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(path, out_path)
-    print(f"[export] Saved to {out_path}")
+    print(f"[export] Using DeepStream export for weights: {weights}")
+    
+    # Build arguments for the DeepStream export script
+    import types
+    args = types.SimpleNamespace()
+    args.weights = weights
+    args.size = export_cfg.get("size", export_cfg.get("imgsz", [640]))
+    if isinstance(args.size, int):
+        args.size = [args.size]
+    args.opset = export_cfg.get("opset", 17)
+    args.simplify = export_cfg.get("simplify", False)
+    args.dynamic = export_cfg.get("dynamic", False)
+    args.batch = export_cfg.get("batch", 1)
+    
+    print(f"[export] Parameters: size={args.size}, opset={args.opset}, "
+          f"simplify={args.simplify}, dynamic={args.dynamic}, batch={args.batch}")
+    
+    # Run the DeepStream export
+    ds_export.main(args)
+    
+    # Move to output path if different from default
+    default_out = weights.rsplit(".", 1)[0] + ".onnx"
+    if out != default_out:
+        out_path = Path(out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        if Path(default_out).exists():
+            shutil.move(default_out, out_path)
+            print(f"[export] Moved to {out_path}")
+        
+        # Also move labels.txt if created
+        if Path("labels.txt").exists():
+            labels_dest = out_path.parent / "labels.txt"
+            shutil.move("labels.txt", labels_dest)
+            print(f"[export] Moved labels.txt to {labels_dest}")
 
 
 def main():
