@@ -42,26 +42,43 @@ All parameters live in `source/config.json`:
 
 ```json
 {
-  "projectName": "luggage-watch-training",
-  "paths": {
-    "data": "my-dataset",
-    "runs": "runs",
-    "model": "model"
-  },
-  "train": {
-    "data": "/app/data/data.yaml",
-    "model": "yolo11m.pt",
-    "epochs": 100,
-    "batch": 16,
-    "imgsz": 640,
-    "device": "0",
-    "name": "yolo11m_131225"
-  },
-  "export": {
-    "opset": 12,
-    "simplify": true,
-    "out": "/app/model/model.onnx"
-  }
+    "train": {
+        "data": "/app/data/dataset.yaml",
+        "model": "/app/runs/detect/yolo26s_1280_020326/weights/best.pt",
+        "epochs": 100,
+        "patience": 30,
+        "batch": 0.8,
+        "imgsz": 1280,
+        "optimizer": "AdamW",
+        "lr0": 0.0008,
+        "lrf": 0.01,
+        "warmup_epochs": 3.0,
+        "freeze": 10,
+        "workers": 8,
+        "cache": "disk",
+        "seed": 0,
+        "resume": true,
+        "exist_ok": false,
+        "save_period": -1,
+        "close_mosaic": 15,
+        "iou": 0.8,
+        "label_smoothing": 0.05,
+        "cls": 0.8,
+        "scale": 0.7,
+        "device": "0",
+        "name": "yolo26s_1280_020326"
+    },
+    "export": {
+        "format": "onnx",
+        "imgsz": 1280,
+        "opset": 12,
+        "simplify": true,
+        "dynamic": false,
+        "half": true,
+        "int8": false,
+        "batch": 1,
+        "out": "/app/model/yolo26s_1280_020326.onnx"
+    }
 }
 ```
 
