@@ -1,35 +1,43 @@
+"""Standalone export script.
+
+Accepts --weights, --out, and any Ultralytics YOLO .export() parameter
+as CLI arguments.  Unknown flags are forwarded directly, so the script
+never needs updating when new export parameters are added.
+
+Usage:
+    python export.py --weights runs/detect/exp/weights/best.pt --format onnx --imgsz 1280
+"""
+
 import argparse
+import json
 import shutil
+from pathlib import Path
+
 from ultralytics import YOLO
+
+from helpers.cli import parse_extra_args
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--weights", required=True, help="Path to trained .pt weights")
-    ap.add_argument("--format", default="onnx", help="Export format (onnx, torchscript, engine, etc.)")
-    ap.add_argument("--imgsz", type=int, default=640)
-    ap.add_argument("--opset", type=int, default=12)
-    ap.add_argument("--simplify", action="store_true")
-    ap.add_argument("--dynamic", action="store_true")
-    ap.add_argument("--half", action="store_true", help="FP16 quantization")
-    ap.add_argument("--int8", action="store_true", help="INT8 quantization")
-    ap.add_argument("--batch", type=int, default=1, help="Export batch size")
-    ap.add_argument("--out", default="model/model.onnx")
-    args = ap.parse_args()
-
-    model = YOLO(args.weights)
-    path = model.export(
-        format=args.format,
-        imgsz=args.imgsz,
-        opset=args.opset,
-        simplify=args.simplify,
-        dynamic=args.dynamic,
-        half=args.half,
-        int8=args.int8,
-        batch=args.batch,
+    ap = argparse.ArgumentParser(
+        description="Export a YOLO model (any .export() kwarg accepted)",
     )
+    ap.add_argument("--weights", required=True, help="Path to trained .pt weights")
+    ap.add_argument("--out", default="model/model.onnx", help="Output path")
+    args, extra = ap.parse_known_args()
 
-    shutil.move(path, args.out)
+    export_kwargs = parse_extra_args(extra)
+    model = YOLO(args.weights)
+
+    print(f"[export] Weights: {args.weights}")
+    print(f"[export] Params : {json.dumps(export_kwargs, indent=2, default=str)}")
+
+    path = model.export(**export_kwargs)
+
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(path, out_path)
+    print(f"[export] Saved to {out_path}")
 
 
 if __name__ == "__main__":
