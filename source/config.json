@@ -26,13 +26,10 @@
         "name": "yolo26s_1280_020326"
     },
     "export": {
-        "format": "onnx",
-        "imgsz": 1280,
-        "opset": 12,
+        "size": [1280, 1280],
+        "opset": 18,
         "simplify": true,
         "dynamic": false,
-        "half": true,
-        "int8": false,
         "batch": 1,
         "out": "/app/model/yolo26s_1280_020326.onnx"
     }
