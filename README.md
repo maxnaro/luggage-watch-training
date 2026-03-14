@@ -84,10 +84,6 @@ All parameters live in `source/config.json`:
 
 | Section       | Purpose                                                                                                                  |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `projectName` | Docker image name                                                                                                        |
-| `paths.data`  | Host path (or Docker volume) to the dataset                                                                              |
-| `paths.runs`  | Host directory for training outputs                                                                                      |
-| `paths.model` | Host directory for exported ONNX models                                                                                  |
 | `train.*`     | Passed directly to `YOLO.train()` — add any [Ultralytics parameter](https://docs.ultralytics.com/modes/train/#arguments) |
 | `export.*`    | Passed directly to `YOLO.export()` — `weights` auto-resolved from `train.name` if omitted                                |
 
