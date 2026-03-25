@@ -6,9 +6,10 @@ applies filtering, remapping, balancing, and optional supplement merging,
 then exports in YOLOv5 format.
 
 Usage:
-    python download_dataset.py                         # COCO only (defaults)
-    python download_dataset.py --open-images 3000      # + Open Images samples
-    python download_dataset.py --supplement ./overhead  # + local YOLO dataset
+    python download_dataset.py                              # defaults (OID + COCO, 2:1)
+    python download_dataset.py --max-samples 30000          # cap total luggage images
+    python download_dataset.py --source-ratio 3.0           # heavier OID weighting
+    python download_dataset.py --supplement ./overhead       # + local YOLO dataset
 """
 
 from __future__ import annotations
@@ -37,17 +38,27 @@ class ZooSource:
     remap: dict[str, str]
     luggage_classes: list[str] = field(default_factory=list)
 
-    def download(self, split: str, max_samples: int | None = None) -> fo.Dataset:
-        name = f"{self.dataset_prefix}-{split}-luggage-watch"
+    @property
+    def person_classes(self) -> list[str]:
+        return [c for c in self.classes if c not in self.luggage_classes]
 
-        # Delete stale cached dataset to avoid referencing missing images
+    def download(
+        self,
+        split: str,
+        max_samples: int | None = None,
+        classes: list[str] | None = None,
+        name_suffix: str = "",
+    ) -> fo.Dataset:
+        download_classes = classes if classes is not None else self.classes
+        name = f"{self.dataset_prefix}-{split}-luggage-watch{name_suffix}"
+
         if fo.dataset_exists(name):
             fo.delete_dataset(name)
 
         kwargs = dict(
             dataset_name=name,
             label_types=["detections"],
-            classes=self.classes,
+            classes=download_classes,
             only_matching=True,
             split=split,
         )
@@ -68,10 +79,11 @@ class ZooSource:
 
     @property
     def zoo_dataset_names(self) -> list[str]:
-        return [
-            f"{self.dataset_prefix}-train-luggage-watch",
-            f"{self.dataset_prefix}-validation-luggage-watch",
-        ]
+        names = []
+        for split in ("train", "validation"):
+            for suffix in ("", "-luggage", "-person"):
+                names.append(f"{self.dataset_prefix}-{split}-luggage-watch{suffix}")
+        return names
 
 
 COCO = ZooSource(
@@ -195,6 +207,13 @@ def oversample_classes(
     return boosted
 
 
+def count_label(view, label: str) -> int:
+    """Count total instances of a label across all samples in a view."""
+    return sum(
+        sum(1 for d in s.ground_truth.detections if d.label == label) for s in view
+    )
+
+
 def balance_classes(dataset: fo.Dataset, ratio: float, seed: int = 42) -> fo.Dataset:
     """Down-sample person-only images so person:luggage instance ratio ~= ratio."""
     luggage_view = dataset.match(
@@ -203,11 +222,6 @@ def balance_classes(dataset: fo.Dataset, ratio: float, seed: int = 42) -> fo.Dat
     person_only_view = dataset.match(
         F("ground_truth.detections").filter(F("label") == "luggage").length() == 0
     )
-
-    def count_label(view, label):
-        return sum(
-            sum(1 for d in s.ground_truth.detections if d.label == label) for s in view
-        )
 
     luggage_count = count_label(luggage_view, "luggage")
     person_in_luggage = count_label(luggage_view, "person")
@@ -402,7 +416,7 @@ def parse_args() -> argparse.Namespace:
         help="Cap images per split (useful for quick tests)",
     )
     ap.add_argument(
-        "--ratio",
+        "--class-ratio",
         type=float,
         default=2.0,
         help="Target person:luggage instance ratio (default: 2.0)",
@@ -420,11 +434,14 @@ def parse_args() -> argparse.Namespace:
         help="Min normalised bbox area for luggage detections (default: 0.001)",
     )
     ap.add_argument(
-        "--open-images",
-        type=int,
-        default=None,
-        metavar="N",
-        help="Merge up to N Open Images V7 samples per split",
+        "--source-ratio",
+        type=float,
+        default=2.0,
+        help=(
+            "OID:COCO download ratio. Controls how --max-samples is split "
+            "between Open Images and COCO. 2.0 means 2x as many OID images "
+            "as COCO (default: 2.0)"
+        ),
     )
     ap.add_argument(
         "--supplement",
@@ -447,10 +464,15 @@ def download_and_filter(
     max_samples: int | None,
     min_area: float,
     tracker: DatasetTracker,
+    classes: list[str] | None = None,
+    name_suffix: str = "",
 ) -> fo.Dataset:
     """Download a zoo source and filter small detections (keeps original labels)."""
-    print(f"  Downloading {source.zoo_name} {split} …")
-    raw = source.download(split, max_samples=max_samples)
+    label = f"{source.zoo_name} {split}"
+    if name_suffix:
+        label += f" ({name_suffix.strip('-')})"
+    print(f"  Downloading {label} …")
+    raw = source.download(split, max_samples=max_samples, classes=classes, name_suffix=name_suffix)
 
     if min_area > 0:
         print(f"  Filtering small detections (min_area={min_area}) …")
@@ -479,41 +501,73 @@ def process_split(
     print(f"  Processing {split} split")
     print(f"{'=' * 60}")
 
-    # 1. Download and filter COCO (original labels preserved)
-    raw = download_and_filter(COCO, split, args.max_samples, args.min_area, tracker)
+    # 1. Split max_samples between OID and COCO by source ratio
+    sr = args.source_ratio
+    coco_max = int(args.max_samples / (sr + 1)) if args.max_samples else None
+    oi_max = int(args.max_samples * sr / (sr + 1)) if args.max_samples else None
 
-    # 2. Oversample luggage sub-classes (must happen before remap)
+    if args.max_samples:
+        print(f"  Source split: COCO={coco_max}, OID={oi_max} (ratio {sr}:1)")
+
+    # 2. Download luggage images from COCO
+    raw_luggage = download_and_filter(
+        COCO, split, coco_max, args.min_area, tracker,
+        classes=COCO.luggage_classes, name_suffix="-luggage",
+    )
+
+    # 3. Oversample luggage sub-classes (before remap)
     if any(w > 1 for w in luggage_weights.values()):
         print(f"  Oversampling luggage sub-classes …")
-        raw = tracker.track(oversample_classes(raw, luggage_weights))
+        raw_luggage = tracker.track(oversample_classes(raw_luggage, luggage_weights))
 
-    # 3. Remap to target classes
-    print(f"  Remapping labels → {TARGET_CLASSES} …")
-    dataset = tracker.track(COCO.remap_labels(raw))
+    # 4. Remap to target classes
+    print(f"  Remapping COCO labels → {TARGET_CLASSES} …")
+    dataset = tracker.track(COCO.remap_labels(raw_luggage))
 
-    # 4. Merge Open Images
-    if args.open_images:
-        oi_raw = download_and_filter(
-            OPEN_IMAGES, split, args.open_images, args.min_area, tracker
+    # 5. Download and merge Open Images luggage
+    oi_raw = download_and_filter(
+        OPEN_IMAGES, split, oi_max, args.min_area, tracker,
+        classes=OPEN_IMAGES.luggage_classes, name_suffix="-luggage",
+    )
+    print(f"  Remapping Open Images labels → {TARGET_CLASSES} …")
+    oi = tracker.track(OPEN_IMAGES.remap_labels(oi_raw))
+    dataset.merge_samples(oi, key_field="id")
+    print(f"    Merged {len(oi)} Open Images samples")
+    fo.delete_dataset(oi.name)
+
+    # 6. Calculate person budget from luggage images
+    luggage_count = count_label(dataset, "luggage")
+    person_in_luggage = count_label(dataset, "person")
+    person_budget = max(0, int(luggage_count * args.class_ratio) - person_in_luggage)
+
+    print(f"    Luggage instances             : {luggage_count}")
+    print(f"    Person instances (luggage imgs): {person_in_luggage}")
+    print(f"    Person budget (person-only)   : {person_budget}")
+
+    # 7. Download only as many person-only images as the ratio requires
+    if person_budget > 0:
+        # Estimate ~2.5 person instances per image, add headroom
+        person_img_cap = int(person_budget / 2) + 100
+        raw_person = download_and_filter(
+            COCO, split, person_img_cap, args.min_area, tracker,
+            classes=COCO.person_classes, name_suffix="-person",
         )
-        print(f"  Remapping Open Images labels → {TARGET_CLASSES} …")
-        oi = tracker.track(OPEN_IMAGES.remap_labels(oi_raw))
-        dataset.merge_samples(oi, key_field="id")
-        print(f"    Merged {len(oi)} Open Images samples")
-        fo.delete_dataset(oi.name)
+        person_mapped = tracker.track(COCO.remap_labels(raw_person))
+        dataset.merge_samples(person_mapped, key_field="id")
+        print(f"    Merged {len(person_mapped)} person-only images")
 
-    # 4. Balance person:luggage ratio
-    print(f"  Balancing classes (target ratio {args.ratio}:1) …")
-    balanced = balance_classes(dataset, ratio=args.ratio, seed=args.seed)
+    # 8. Balance to exact ratio (trims any excess person images)
+    print(f"  Balancing classes (target ratio {args.class_ratio}:1) …")
+    balanced = balance_classes(dataset, ratio=args.class_ratio, seed=args.seed)
 
-    # 5. Merge local supplement (after balancing — preserves all supplement data)
+    # 9. Merge local supplement (after balancing — preserves all supplement data)
     if args.supplement:
         print(f"  Merging supplement from {args.supplement} …")
         balanced = merge_supplement(balanced, args.supplement, yolo_split)
 
     balanced = drop_missing_media_samples(balanced, context=f"final {split}")
 
-    # 6. Export
+    # 10. Export
     print(f"  Exporting {len(balanced)} samples as YOLOv5/{yolo_split} …")
     export_yolo(balanced, export_dir, yolo_split)
 
