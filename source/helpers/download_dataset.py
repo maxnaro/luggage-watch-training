@@ -1,53 +1,114 @@
 """
-Download a person + luggage dataset from COCO using FiftyOne.
+Download a person + luggage dataset for YOLO training.
 
-Luggage is an aggregate class combining the COCO classes:
-  - backpack
-  - handbag
-  - suitcase
-
-Exports train and val splits in YOLOv5 format (compatible with YOLO11 and YOLO26).
-Generates a data.yaml consumed by Ultralytics training.
+Pulls from one or more FiftyOne zoo sources (COCO 2017, Open Images V7),
+applies filtering, remapping, balancing, and optional supplement merging,
+then exports in YOLOv5 format.
 
 Usage:
-    python download_dataset.py                         # defaults
-    python download_dataset.py --out ../data           # custom output dir
-    python download_dataset.py --max-samples 5000      # cap per split
+    python download_dataset.py                         # COCO only (defaults)
+    python download_dataset.py --open-images 3000      # + Open Images samples
+    python download_dataset.py --supplement ./overhead  # + local YOLO dataset
 """
+
+from __future__ import annotations
 
 import argparse
 import random
+import shutil
+from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import fiftyone as fo
 import fiftyone.zoo as foz
 from fiftyone import ViewField as F
 
-# COCO classes that map to "luggage"
-LUGGAGE_CLASSES = ["backpack", "handbag", "suitcase"]
-SOURCE_CLASSES = ["person"] + LUGGAGE_CLASSES
-
-# Target label mapping  (class_id → name)
 TARGET_CLASSES = ["person", "luggage"]
-REMAP = {c: "luggage" for c in LUGGAGE_CLASSES}
-REMAP["person"] = "person"
 
 
-def download_split(split: str, max_samples: int | None = None) -> fo.Dataset:
-    """Download a COCO split filtered to the classes we need."""
-    kwargs = dict(
-        dataset_name=f"coco-2017-{split}-luggage-watch",
-        label_types=["detections"],
-        classes=SOURCE_CLASSES,
-        only_matching=True,  # keep only images with >=1 target class
-        split=split,
-    )
-    if max_samples is not None:
-        kwargs["max_samples"] = max_samples
+@dataclass
+class ZooSource:
+    """Configuration for a FiftyOne zoo dataset source."""
 
-    # Load (downloads on first run, cached afterwards)
-    dataset = foz.load_zoo_dataset("coco-2017", **kwargs)
-    return dataset
+    zoo_name: str
+    dataset_prefix: str
+    classes: list[str]
+    remap: dict[str, str]
+    luggage_classes: list[str] = field(default_factory=list)
+
+    def download(self, split: str, max_samples: int | None = None) -> fo.Dataset:
+        name = f"{self.dataset_prefix}-{split}-luggage-watch"
+
+        # Delete stale cached dataset to avoid referencing missing images
+        if fo.dataset_exists(name):
+            fo.delete_dataset(name)
+
+        kwargs = dict(
+            dataset_name=name,
+            label_types=["detections"],
+            classes=self.classes,
+            only_matching=True,
+            split=split,
+        )
+        if max_samples is not None:
+            kwargs["max_samples"] = max_samples
+        return foz.load_zoo_dataset(self.zoo_name, **kwargs)
+
+    def remap_labels(self, dataset: fo.Dataset) -> fo.Dataset:
+        mapped = dataset.clone()
+        for sample in mapped.iter_samples(autosave=True):
+            sample.ground_truth.detections = [
+                det
+                for det in sample.ground_truth.detections
+                if det.label in self.remap
+                and not (setattr(det, "label", self.remap[det.label]))  # remap in-place
+            ]
+        return mapped
+
+    @property
+    def zoo_dataset_names(self) -> list[str]:
+        return [
+            f"{self.dataset_prefix}-train-luggage-watch",
+            f"{self.dataset_prefix}-validation-luggage-watch",
+        ]
+
+
+COCO = ZooSource(
+    zoo_name="coco-2017",
+    dataset_prefix="coco-2017",
+    classes=["person", "backpack", "handbag", "suitcase"],
+    remap={
+        "person": "person",
+        "backpack": "luggage",
+        "handbag": "luggage",
+        "suitcase": "luggage",
+    },
+    luggage_classes=["backpack", "handbag", "suitcase"],
+)
+
+_OI_PERSON_CLASSES = ["Person", "Man", "Woman", "Boy", "Girl", "Human body"]
+_OI_LUGGAGE_CLASSES = [
+    "Backpack",
+    "Suitcase",
+    "Handbag",
+    "Briefcase",
+    "Luggage and bags"
+]
+
+OPEN_IMAGES = ZooSource(
+    zoo_name="open-images-v7",
+    dataset_prefix="open-images-v7",
+    classes=_OI_PERSON_CLASSES + _OI_LUGGAGE_CLASSES,
+    remap={
+        **{c: "person" for c in _OI_PERSON_CLASSES},
+        **{c: "luggage" for c in _OI_LUGGAGE_CLASSES},
+    },
+    luggage_classes=_OI_LUGGAGE_CLASSES,
+)
+
+
+# Dataset transforms
 
 
 def filter_small_detections(
@@ -55,20 +116,10 @@ def filter_small_detections(
     min_area: float,
     classes: list[str] | None = None,
 ) -> fo.Dataset:
-    """Remove detection annotations below a minimum bounding box area and
-    drop images that lose all target-class detections as a result.
+    """Remove detections below a minimum bounding box area.
 
-    Parameters
-    ----------
-    dataset : fo.Dataset
-        Dataset with original COCO labels.
-    min_area : float
-        Minimum relative bounding box area (width * height, where both are
-        normalised to [0, 1]).  For example, 0.001 ≈ 32*32 px in a 1024*1024
-        image.  Detections smaller than this are removed.
-    classes : list[str] | None
-        If provided, only filter detections whose label is in this list.
-        Other classes are kept regardless of size.
+    Area is relative (width * height, both normalised to [0, 1]).
+    0.001 ~= 32x32 px in a 1024x1024 image.
     """
     filtered = dataset.clone()
     removed_count = 0
@@ -76,44 +127,47 @@ def filter_small_detections(
     for sample in filtered.iter_samples(autosave=True):
         kept = []
         for det in sample.ground_truth.detections:
-            _, _, w, h = det.bounding_box  # [x, y, w, h] normalised
-            area = w * h
-            if area < min_area and (classes is None or det.label in classes):
+            _, _, w, h = det.bounding_box
+            if w * h < min_area and (classes is None or det.label in classes):
                 removed_count += 1
                 continue
             kept.append(det)
         sample.ground_truth.detections = kept
 
-    # Drop images that no longer contain any target-class detections
-    non_empty = filtered.match(
-        F("ground_truth.detections").length() > 0
-    )
+    non_empty = filtered.match(F("ground_truth.detections").length() > 0)
     dropped_images = len(filtered) - len(non_empty)
 
     print(f"    Removed {removed_count} small detections (area < {min_area})")
-    print(f"    Dropped {dropped_images} images with no remaining detections")
+    print(f"    Dropped {dropped_images} now-empty images")
 
     return non_empty
+
+
+def drop_missing_media_samples(dataset: fo.Dataset, context: str = "") -> fo.Dataset:
+    """Drop samples whose file paths no longer exist on disk."""
+    missing_ids = []
+    for sample in dataset.iter_samples(progress=False):
+        if not Path(sample.filepath).is_file():
+            missing_ids.append(sample.id)
+
+    if not missing_ids:
+        return dataset
+
+    cleaned = dataset.exclude(missing_ids)
+    label = f" for {context}" if context else ""
+    print(
+        f"    Removed {len(missing_ids)} samples with missing image files{label}"
+    )
+    return cleaned
 
 
 def oversample_classes(
     dataset: fo.Dataset,
     weights: dict[str, int],
-    seed: int = 42,
 ) -> fo.Dataset:
-    """Duplicate samples containing specific classes to increase their
-    representation in the dataset.
+    """Duplicate images containing specific classes.
 
-    Parameters
-    ----------
-    dataset : fo.Dataset
-        Dataset with original COCO labels (before remapping).
-    weights : dict[str, int]
-        Mapping of class name -> integer weight.  A weight of 3 means images
-        containing that class will appear 3* (i.e. 2 extra copies).  Classes
-        with weight <= 1 are left untouched.
-    seed : int
-        Random seed (unused currently, reserved for future stochastic sampling).
+    A weight of 3 means 3x total (2 extra copies). Weight <= 1 is a no-op.
     """
     classes_to_boost = {c: w for c, w in weights.items() if w > 1}
     if not classes_to_boost:
@@ -126,68 +180,23 @@ def oversample_classes(
         )
         n_originals = len(view)
         if n_originals == 0:
-            print(f"    ⚠ No images contain '{cls}' — skipping oversample")
+            print(f"    No images contain '{cls}' — skipping")
             continue
 
-        extra_copies = weight - 1
+        extra = weight - 1
         print(
-            f"    Oversampling '{cls}': {n_originals} images * {weight} "
-            f"(+{n_originals * extra_copies} copies)"
+            f"    Oversampling '{cls}': {n_originals} x{weight} (+{n_originals * extra})"
         )
-        for _ in range(extra_copies):
+        for _ in range(extra):
             for sample in view:
-                dup = sample.copy()
-                boosted.add_sample(dup)
+                boosted.add_sample(sample.copy())
 
     print(f"    Dataset size after oversampling: {len(boosted)} images")
     return boosted
 
 
-def remap_labels(dataset: fo.Dataset) -> fo.Dataset:
-    """Merge luggage sub-classes into a single 'luggage' class and drop
-    any other classes that may have leaked through."""
-    # Clone so we don't mutate the zoo cache
-    mapped = dataset.clone()
-
-    for sample in mapped.iter_samples(autosave=True):
-        new_dets = []
-        for det in sample.ground_truth.detections:
-            if det.label in REMAP:
-                det.label = REMAP[det.label]
-                new_dets.append(det)
-            # else: drop detection (shouldn't happen with only_matching)
-        sample.ground_truth.detections = new_dets
-
-    return mapped
-
-
 def balance_classes(dataset: fo.Dataset, ratio: float, seed: int = 42) -> fo.Dataset:
-    """Down-sample person-only images so person:luggage instance ratio ≈ `ratio`.
-
-    Strategy
-    --------
-    1. Split the dataset into images that contain ≥1 luggage detection
-       ('luggage images') and those with only person detections
-       ('person-only images').
-    2. Count luggage instances across all luggage images.
-    3. Calculate how many person instances are allowed:
-           allowed_person = luggage_instances * ratio
-    4. Subtract person instances already present in luggage images.
-    5. Greedily keep person-only images (shuffled) until the remaining
-       person-instance budget is exhausted.
-    6. Return the balanced dataset.
-
-    Parameters
-    ----------
-    dataset : fo.Dataset
-        Remapped dataset (labels are 'person' / 'luggage').
-    ratio : float
-        Target person-to-luggage *instance* ratio (e.g. 2.0 → 2 persons
-        per 1 luggage instance).
-    seed : int
-        Random seed for reproducible subsampling.
-    """
-    # identify luggage vs person-only images
+    """Down-sample person-only images so person:luggage instance ratio ~= ratio."""
     luggage_view = dataset.match(
         F("ground_truth.detections").filter(F("label") == "luggage").length() > 0
     )
@@ -195,82 +204,190 @@ def balance_classes(dataset: fo.Dataset, ratio: float, seed: int = 42) -> fo.Dat
         F("ground_truth.detections").filter(F("label") == "luggage").length() == 0
     )
 
-    # count instances
-    luggage_instance_count = sum(
-        sum(1 for d in s.ground_truth.detections if d.label == "luggage")
-        for s in luggage_view
-    )
-    person_in_luggage_imgs = sum(
-        sum(1 for d in s.ground_truth.detections if d.label == "person")
-        for s in luggage_view
-    )
+    def count_label(view, label):
+        return sum(
+            sum(1 for d in s.ground_truth.detections if d.label == label) for s in view
+        )
 
-    allowed_person_total = int(luggage_instance_count * ratio)
-    person_budget = max(0, allowed_person_total - person_in_luggage_imgs)
+    luggage_count = count_label(luggage_view, "luggage")
+    person_in_luggage = count_label(luggage_view, "person")
+    person_budget = max(0, int(luggage_count * ratio) - person_in_luggage)
 
-    print(f"    Luggage instances            : {luggage_instance_count}")
-    print(f"    Person instances (luggage imgs): {person_in_luggage_imgs}")
+    print(f"    Luggage instances             : {luggage_count}")
+    print(f"    Person instances (luggage imgs): {person_in_luggage}")
     print(f"    Person budget (person-only)   : {person_budget}")
 
-    # subsample person-only images
     person_only_ids = [s.id for s in person_only_view]
     random.seed(seed)
     random.shuffle(person_only_ids)
 
-    keep_ids = []
-    accumulated = 0
+    keep_ids, accumulated = [], 0
     for sid in person_only_ids:
         if accumulated >= person_budget:
             break
-        sample = dataset[sid]
-        n_person = sum(1 for d in sample.ground_truth.detections if d.label == "person")
+        n = sum(1 for d in dataset[sid].ground_truth.detections if d.label == "person")
         keep_ids.append(sid)
-        accumulated += n_person
+        accumulated += n
 
-    # merge luggage images + kept person-only images
-    all_keep_ids = [s.id for s in luggage_view] + keep_ids
-    balanced = dataset.select(all_keep_ids)
+    balanced = dataset.select([s.id for s in luggage_view] + keep_ids)
 
-    # Stats
-    total_person = sum(
-        sum(1 for d in s.ground_truth.detections if d.label == "person")
-        for s in balanced
-    )
-    total_luggage = sum(
-        sum(1 for d in s.ground_truth.detections if d.label == "luggage")
-        for s in balanced
-    )
+    total_person = count_label(balanced, "person")
+    total_luggage = count_label(balanced, "luggage")
     actual_ratio = total_person / total_luggage if total_luggage else float("inf")
 
-    print(f"    Balanced dataset: {len(balanced)} images")
-    print(f"    Person instances : {total_person}")
-    print(f"    Luggage instances: {total_luggage}")
-    print(f"    Actual ratio     : {actual_ratio:.2f}:1")
+    print(f"    Balanced: {len(balanced)} images, ratio {actual_ratio:.2f}:1")
 
     return balanced
 
 
-def export_yolo(dataset: fo.Dataset, export_dir: Path, split: str) -> None:
-    """Export a FiftyOne dataset to YOLOv5 format under export_dir/<split>."""
-    dataset.export(
-        export_dir=str(export_dir),
+def merge_supplement(
+    dataset: fo.Dataset, supplement_dir: Path, split: str
+) -> fo.Dataset:
+    """Merge a local YOLOv5-format dataset into the main dataset."""
+    yaml_path = supplement_dir / "dataset.yaml"
+    if not yaml_path.exists():
+        raise FileNotFoundError(
+            f"Expected dataset.yaml at {yaml_path}. "
+            f"Ensure the supplement directory is in YOLOv5 format."
+        )
+
+    supp_name = f"supplement-{split}-{dataset.name}"
+    supp = fo.Dataset.from_dir(
+        dataset_dir=str(supplement_dir),
         dataset_type=fo.types.YOLOv5Dataset,
         split=split,
-        classes=TARGET_CLASSES,
+        name=supp_name,
         label_field="ground_truth",
     )
 
+    invalid = set(supp.distinct("ground_truth.detections.label")) - set(TARGET_CLASSES)
+    if invalid:
+        raise ValueError(
+            f"Supplement contains unknown classes: {invalid}. Expected: {TARGET_CLASSES}"
+        )
 
-def cleanup_fiftyone_datasets(*names: str) -> None:
-    """Delete temporary FiftyOne datasets from the local DB."""
-    for name in names:
-        if fo.dataset_exists(name):
-            fo.delete_dataset(name)
+    before = len(dataset)
+    dataset.merge_samples(supp)
+    print(f"    Merged {len(dataset) - before} supplement images")
+
+    fo.delete_dataset(supp_name)
+    return dataset
 
 
-def main():
+def materialise_duplicate_media(
+    dataset: fo.Dataset,
+    export_dir: Path,
+    split: str,
+) -> tuple[fo.Dataset, Path | None]:
+    """Give duplicated samples unique media paths so export keeps all copies."""
+    filepath_counts = Counter(dataset.values("filepath"))
+    duplicates_to_copy = sum(count - 1 for count in filepath_counts.values() if count > 1)
+    if duplicates_to_copy == 0:
+        return dataset, None
+
+    materialised = dataset.clone()
+    materialised_dir = export_dir / ".materialised_media" / split
+    if materialised_dir.exists():
+        shutil.rmtree(materialised_dir, ignore_errors=True)
+    materialised_dir.mkdir(parents=True, exist_ok=True)
+
+    seen = Counter()
+    copied = 0
+    for sample in materialised.iter_samples(autosave=True, progress=False):
+        source_path = sample.filepath
+        if filepath_counts[source_path] <= 1:
+            continue
+
+        seen[source_path] += 1
+        if seen[source_path] == 1:
+            continue
+
+        src = Path(source_path)
+        dst = materialised_dir / f"{sample.id}{src.suffix}"
+        shutil.copy2(src, dst)
+        sample.filepath = str(dst)
+        copied += 1
+
+    print(f"    materialised {copied} duplicated samples for export")
+    return materialised, materialised_dir
+
+
+def export_yolo(dataset: fo.Dataset, export_dir: Path, split: str) -> None:
+    """Export to YOLOv5 format."""
+    export_dataset, materialised_dir = materialise_duplicate_media(
+        dataset, export_dir, split
+    )
+    temp_dataset_name = export_dataset.name if export_dataset is not dataset else None
+
+    try:
+        export_dataset.export(
+            export_dir=str(export_dir),
+            dataset_type=fo.types.YOLOv5Dataset,
+            split=split,
+            classes=TARGET_CLASSES,
+            label_field="ground_truth",
+        )
+    finally:
+        if temp_dataset_name and fo.dataset_exists(temp_dataset_name):
+            fo.delete_dataset(temp_dataset_name)
+        if materialised_dir and materialised_dir.exists():
+            shutil.rmtree(materialised_dir, ignore_errors=True)
+
+
+def write_dataset_yaml(export_dir: Path) -> None:
+    """Overwrite the FiftyOne-generated YAML with the correct one for training."""
+    yaml_path = export_dir / "dataset.yaml"
+    yaml_path.write_text(
+        "names:\n"
+        "  0: person\n"
+        "  1: luggage\n"
+        "path: /app/data\n"
+        "train: ./images/train/\n"
+        "val: ./images/val/\n"
+    )
+
+
+# Cleanup
+
+
+class DatasetTracker:
+    """Track temporary FiftyOne datasets for cleanup."""
+
+    def __init__(self):
+        self._names: list[str] = []
+
+    def track(self, dataset: fo.Dataset) -> fo.Dataset:
+        self._names.append(dataset.name)
+        return dataset
+
+    def cleanup(self):
+        for name in self._names:
+            if fo.dataset_exists(name):
+                fo.delete_dataset(name)
+        self._names.clear()
+
+
+# CLI & pipeline
+
+
+def parse_luggage_weights(raw: str | None) -> dict[str, int]:
+    weights = {c: 1 for c in COCO.luggage_classes}
+    if not raw:
+        return weights
+    for item in raw.split(","):
+        key, val = item.strip().split("=")
+        key = key.strip()
+        if key not in COCO.luggage_classes:
+            raise argparse.ArgumentTypeError(
+                f"Unknown luggage sub-class '{key}'. Valid: {COCO.luggage_classes}"
+            )
+        weights[key] = int(val)
+    return weights
+
+
+def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
-        description="Download person + luggage COCO subset for YOLO training"
+        description="Download person + luggage dataset for YOLO training"
     )
     ap.add_argument(
         "--out",
@@ -282,7 +399,7 @@ def main():
         "--max-samples",
         type=int,
         default=None,
-        help="Cap the number of images per split (useful for quick tests)",
+        help="Cap images per split (useful for quick tests)",
     )
     ap.add_argument(
         "--ratio",
@@ -300,82 +417,132 @@ def main():
         "--min-area",
         type=float,
         default=0.001,
-        help=(
-            "Minimum normalised bounding box area (w*h) for luggage "
-            "detections. Annotations smaller than this are removed to "
-            "reduce label noise. 0.001 ≈ 32*32 px in a 1024*1024 image. "
-            "(default: 0.001)"
-        ),
+        help="Min normalised bbox area for luggage detections (default: 0.001)",
+    )
+    ap.add_argument(
+        "--open-images",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Merge up to N Open Images V7 samples per split",
+    )
+    ap.add_argument(
+        "--supplement",
+        type=Path,
+        default=None,
+        help="Path to a supplementary YOLOv5-format dataset to merge in",
     )
     ap.add_argument(
         "--luggage-weights",
         type=str,
         default=None,
-        help=(
-            "Per-subclass oversampling weights as comma-separated key=value "
-            "pairs, e.g. 'backpack=1,handbag=3,suitcase=1'. Classes with "
-            "weight > 1 will have their images duplicated that many times."
-        ),
+        help="Per-subclass oversampling, e.g. 'backpack=1,handbag=3,suitcase=1'",
     )
-    args = ap.parse_args()
+    return ap.parse_args()
 
-    # Parse luggage weights
-    luggage_weights: dict[str, int] = {c: 1 for c in LUGGAGE_CLASSES}
-    if args.luggage_weights:
-        for item in args.luggage_weights.split(","):
-            key, val = item.strip().split("=")
-            key = key.strip()
-            if key not in LUGGAGE_CLASSES:
-                ap.error(f"Unknown luggage sub-class '{key}'. "
-                         f"Valid: {LUGGAGE_CLASSES}")
-            luggage_weights[key] = int(val)
 
-    export_dir: Path = args.out.resolve()
+def download_and_filter(
+    source: ZooSource,
+    split: str,
+    max_samples: int | None,
+    min_area: float,
+    tracker: DatasetTracker,
+) -> fo.Dataset:
+    """Download a zoo source and filter small detections (keeps original labels)."""
+    print(f"  Downloading {source.zoo_name} {split} …")
+    raw = source.download(split, max_samples=max_samples)
+
+    if min_area > 0:
+        print(f"  Filtering small detections (min_area={min_area}) …")
+        raw = tracker.track(
+            filter_small_detections(raw, min_area, source.luggage_classes)
+        )
+
+    raw = tracker.track(
+        drop_missing_media_samples(raw, context=f"{source.zoo_name}/{split}")
+    )
+
+    return raw
+
+
+def process_split(
+    split: str,
+    args: argparse.Namespace,
+    luggage_weights: dict[str, int],
+    tracker: DatasetTracker,
+    export_dir: Path,
+) -> None:
+    """Run the full pipeline for a single split."""
+    yolo_split = "val" if split == "validation" else split
+
+    print(f"\n{'=' * 60}")
+    print(f"  Processing {split} split")
+    print(f"{'=' * 60}")
+
+    # 1. Download and filter COCO (original labels preserved)
+    raw = download_and_filter(COCO, split, args.max_samples, args.min_area, tracker)
+
+    # 2. Oversample luggage sub-classes (must happen before remap)
+    if any(w > 1 for w in luggage_weights.values()):
+        print(f"  Oversampling luggage sub-classes …")
+        raw = tracker.track(oversample_classes(raw, luggage_weights))
+
+    # 3. Remap to target classes
+    print(f"  Remapping labels → {TARGET_CLASSES} …")
+    dataset = tracker.track(COCO.remap_labels(raw))
+
+    # 4. Merge Open Images
+    if args.open_images:
+        oi_raw = download_and_filter(
+            OPEN_IMAGES, split, args.open_images, args.min_area, tracker
+        )
+        print(f"  Remapping Open Images labels → {TARGET_CLASSES} …")
+        oi = tracker.track(OPEN_IMAGES.remap_labels(oi_raw))
+        dataset.merge_samples(oi, key_field="id")
+        print(f"    Merged {len(oi)} Open Images samples")
+        fo.delete_dataset(oi.name)
+
+    # 4. Balance person:luggage ratio
+    print(f"  Balancing classes (target ratio {args.ratio}:1) …")
+    balanced = balance_classes(dataset, ratio=args.ratio, seed=args.seed)
+
+    # 5. Merge local supplement (after balancing — preserves all supplement data)
+    if args.supplement:
+        print(f"  Merging supplement from {args.supplement} …")
+        balanced = merge_supplement(balanced, args.supplement, yolo_split)
+
+    balanced = drop_missing_media_samples(balanced, context=f"final {split}")
+
+    # 6. Export
+    print(f"  Exporting {len(balanced)} samples as YOLOv5/{yolo_split} …")
+    export_yolo(balanced, export_dir, yolo_split)
+
+
+def main():
+    args = parse_args()
+    luggage_weights = parse_luggage_weights(args.luggage_weights)
+
+    export_dir = args.out.resolve()
     export_dir.mkdir(parents=True, exist_ok=True)
 
-    cloned_names: list[str] = []
+    tracker = DatasetTracker()
 
-    for split in ("train", "validation"):
-        yolo_split = "val" if split == "validation" else split
-        print(f"\n{'='*60}")
-        print(f"  Downloading COCO 2017 {split} split …")
-        print(f"{'='*60}")
-        raw = download_split(split, max_samples=args.max_samples)
+    try:
+        for split in ("train", "validation"):
+            process_split(split, args, luggage_weights, tracker, export_dir)
 
-        if args.min_area > 0:
-            print(f"  Filtering small detections (min_area={args.min_area}) …")
-            raw = filter_small_detections(
-                raw, min_area=args.min_area, classes=LUGGAGE_CLASSES,
-            )
-            cloned_names.append(raw.name)
+        write_dataset_yaml(export_dir)
+    finally:
+        # Clean up all zoo + intermediate datasets, even after errors.
+        tracker.cleanup()
+        for source in (COCO, OPEN_IMAGES):
+            for name in source.zoo_dataset_names:
+                if fo.dataset_exists(name):
+                    fo.delete_dataset(name)
 
-        if any(w > 1 for w in luggage_weights.values()):
-            print(f"  Oversampling luggage sub-classes {luggage_weights} …")
-            raw = oversample_classes(raw, luggage_weights, seed=args.seed)
-            cloned_names.append(raw.name)
-
-        print(f"  Remapping labels → {TARGET_CLASSES} …")
-        mapped = remap_labels(raw)
-        cloned_names.append(mapped.name)
-
-        print(f"  Balancing classes (target ratio {args.ratio}:1) …")
-        balanced = balance_classes(mapped, ratio=args.ratio, seed=args.seed)
-
-        print(f"  Exporting {len(balanced)} samples as YOLOv5/{yolo_split} …")
-        export_yolo(balanced, export_dir, yolo_split)
-
-        # Free the cloned dataset from FiftyOne DB
-        fo.delete_dataset(mapped.name)
-
-    # Clean up source zoo datasets from FiftyOne DB
-    cleanup_fiftyone_datasets(
-        "coco-2017-train-luggage-watch",
-        "coco-2017-validation-luggage-watch",
-    )
-
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  Done!  Dataset written to: {export_dir}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"\n  Classes: {TARGET_CLASSES}")
 
 
