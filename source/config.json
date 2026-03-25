@@ -1,7 +1,7 @@
 {
     "train": {
         "data": "/app/data/dataset.yaml",
-        "model": "yolo26n.pt",
+        "model": "/app/runs/detect/rebalanced_loss_26s/weights/last.pt",
         "epochs": 200,
         "patience": 30,
         "batch": 0.95,
@@ -14,7 +14,7 @@
         "workers": 8,
         "cache": "disk",
         "seed": 0,
-        "resume": false,
+        "resume": true,
         "exist_ok": false,
         "save_period": -1,
         "close_mosaic": 20,
@@ -30,7 +30,7 @@
         "multi_scale": false,
         "flipud": 0.5,
         "box": 7.5,
-        "name": "rebalanced_loss_26n"
+        "name": "rebalanced_loss_26s"
     },
     "export": {
         "size": [640, 640],
