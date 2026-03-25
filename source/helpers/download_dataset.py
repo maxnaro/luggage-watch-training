@@ -50,6 +50,52 @@ def download_split(split: str, max_samples: int | None = None) -> fo.Dataset:
     return dataset
 
 
+def filter_small_detections(
+    dataset: fo.Dataset,
+    min_area: float,
+    classes: list[str] | None = None,
+) -> fo.Dataset:
+    """Remove detection annotations below a minimum bounding box area and
+    drop images that lose all target-class detections as a result.
+
+    Parameters
+    ----------
+    dataset : fo.Dataset
+        Dataset with original COCO labels.
+    min_area : float
+        Minimum relative bounding box area (width * height, where both are
+        normalised to [0, 1]).  For example, 0.001 ≈ 32*32 px in a 1024*1024
+        image.  Detections smaller than this are removed.
+    classes : list[str] | None
+        If provided, only filter detections whose label is in this list.
+        Other classes are kept regardless of size.
+    """
+    filtered = dataset.clone()
+    removed_count = 0
+
+    for sample in filtered.iter_samples(autosave=True):
+        kept = []
+        for det in sample.ground_truth.detections:
+            _, _, w, h = det.bounding_box  # [x, y, w, h] normalised
+            area = w * h
+            if area < min_area and (classes is None or det.label in classes):
+                removed_count += 1
+                continue
+            kept.append(det)
+        sample.ground_truth.detections = kept
+
+    # Drop images that no longer contain any target-class detections
+    non_empty = filtered.match(
+        F("ground_truth.detections").length() > 0
+    )
+    dropped_images = len(filtered) - len(non_empty)
+
+    print(f"    Removed {removed_count} small detections (area < {min_area})")
+    print(f"    Dropped {dropped_images} images with no remaining detections")
+
+    return non_empty
+
+
 def oversample_classes(
     dataset: fo.Dataset,
     weights: dict[str, int],
@@ -251,6 +297,17 @@ def main():
         help="Random seed for reproducible subsampling (default: 42)",
     )
     ap.add_argument(
+        "--min-area",
+        type=float,
+        default=0.001,
+        help=(
+            "Minimum normalised bounding box area (w*h) for luggage "
+            "detections. Annotations smaller than this are removed to "
+            "reduce label noise. 0.001 ≈ 32*32 px in a 1024*1024 image. "
+            "(default: 0.001)"
+        ),
+    )
+    ap.add_argument(
         "--luggage-weights",
         type=str,
         default=None,
@@ -284,6 +341,13 @@ def main():
         print(f"  Downloading COCO 2017 {split} split …")
         print(f"{'='*60}")
         raw = download_split(split, max_samples=args.max_samples)
+
+        if args.min_area > 0:
+            print(f"  Filtering small detections (min_area={args.min_area}) …")
+            raw = filter_small_detections(
+                raw, min_area=args.min_area, classes=LUGGAGE_CLASSES,
+            )
+            cloned_names.append(raw.name)
 
         if any(w > 1 for w in luggage_weights.values()):
             print(f"  Oversampling luggage sub-classes {luggage_weights} …")
