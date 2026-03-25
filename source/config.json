@@ -1,8 +1,8 @@
 {
     "train": {
         "data": "/app/data/dataset.yaml",
-        "model": "yolo26m.pt",
-        "epochs": 150,
+        "model": "yolo26n.pt",
+        "epochs": 200,
         "patience": 30,
         "batch": 0.95,
         "imgsz": 640,
@@ -18,9 +18,9 @@
         "exist_ok": false,
         "save_period": -1,
         "close_mosaic": 20,
-        "iou": 0.6,
-        "label_smoothing": 0.01,
-        "cls": 0.3,
+        "iou": 0.7,
+        "label_smoothing": 0.0,
+        "cls": 0.5,
         "scale": 0.2,
         "device": "0",
         "perspective": 0.002,
@@ -29,8 +29,8 @@
         "copy_paste": 0.3,
         "multi_scale": false,
         "flipud": 0.5,
-        "box": 10.0,
-        "name": "aggressive_augmentation_26m"
+        "box": 7.5,
+        "name": "rebalanced_loss_26n"
     },
     "export": {
         "size": [640, 640],
