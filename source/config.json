@@ -1,8 +1,8 @@
 {
-    "train": {
+    "phase1_coco_baseline": {
         "data": "/app/data/dataset.yaml",
-        "model": "/app/runs/detect/rebalanced_loss_26s/weights/last.pt",
-        "epochs": 200,
+        "model": "yolo26s.pt",
+        "epochs": 150,
         "patience": 30,
         "batch": 0.95,
         "imgsz": 640,
@@ -14,7 +14,7 @@
         "workers": 8,
         "cache": "disk",
         "seed": 0,
-        "resume": true,
+        "resume": false,
         "exist_ok": false,
         "save_period": -1,
         "close_mosaic": 20,
@@ -30,7 +30,40 @@
         "multi_scale": false,
         "flipud": 0.5,
         "box": 7.5,
-        "name": "rebalanced_loss_26s"
+        "name": "coco_baseline_26s"
+    },
+    "phase2_finetune": {
+        "data": "/app/data/dataset.yaml",
+        "model": "/app/runs/detect/coco_baseline_26s/weights/best.pt",
+        "epochs": 80,
+        "patience": 20,
+        "batch": 0.95,
+        "imgsz": 640,
+        "optimizer": "AdamW",
+        "lr0": 0.0002,
+        "lrf": 0.01,
+        "warmup_epochs": 2.0,
+        "freeze": 10,
+        "workers": 8,
+        "cache": "disk",
+        "seed": 0,
+        "resume": false,
+        "exist_ok": false,
+        "save_period": -1,
+        "close_mosaic": 10,
+        "iou": 0.7,
+        "label_smoothing": 0.0,
+        "cls": 0.5,
+        "scale": 0.15,
+        "device": "0",
+        "perspective": 0.001,
+        "shear": 3.0,
+        "degrees": 30.0,
+        "copy_paste": 0.2,
+        "multi_scale": false,
+        "flipud": 0.5,
+        "box": 7.5,
+        "name": "finetune_mixed_26s"
     },
     "export": {
         "size": [640, 640],
@@ -38,6 +71,7 @@
         "simplify": true,
         "dynamic": false,
         "batch": 1,
+        "half": true,
         "out": "/app/model/luggage_detection.onnx"
     }
 }

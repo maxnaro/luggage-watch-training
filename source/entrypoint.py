@@ -30,9 +30,40 @@ def load_config() -> dict:
         return json.load(f)
 
 
-def run_train(config: dict) -> None:
-    """Run YOLO training from the 'train' section of the config."""
-    train_cfg = config.get("train", {})
+def resolve_train_config(config: dict, phase: str | None = None) -> dict:
+    """Resolve the training config for a given phase.
+
+    Supports both single-phase configs (key: "train") and multi-phase
+    configs (keys: "phase1_...", "phase2_...", etc).  When *phase* is
+    given, the matching key is used; otherwise falls back to "train".
+    """
+    if phase:
+        if phase in config:
+            return dict(config[phase])
+        # Allow short names like "phase1" to match "phase1_coco_baseline"
+        for key in config:
+            if key.startswith(phase):
+                return dict(config[key])
+        print(f"Error: phase '{phase}' not found in config", file=sys.stderr)
+        print(f"Available keys: {[k for k in config if k != 'export']}", file=sys.stderr)
+        sys.exit(1)
+
+    if "train" in config:
+        return dict(config["train"])
+
+    # Auto-detect: use the first phase key
+    for key in config:
+        if key.startswith("phase"):
+            print(f"[train] No --phase specified, using '{key}'")
+            return dict(config[key])
+
+    print("Error: no 'train' or 'phase*' key found in config", file=sys.stderr)
+    sys.exit(1)
+
+
+def run_train(config: dict, phase: str | None = None) -> None:
+    """Run YOLO training from the config."""
+    train_cfg = resolve_train_config(config, phase)
 
     model_name = train_cfg.pop("model", "yolo11n.pt")
     print(f"[train] Loading base model: {model_name}")
@@ -126,12 +157,22 @@ def main():
         choices=["train", "export"],
         help="Action to perform: 'train' or 'export'",
     )
+    parser.add_argument(
+        "--phase",
+        type=str,
+        default=None,
+        help=(
+            "Config phase to use for training, e.g. 'phase1_coco_baseline'. "
+            "Prefix matching supported ('phase1' matches 'phase1_coco_baseline'). "
+            "Defaults to 'train' key or first phase key."
+        ),
+    )
     args = parser.parse_args()
 
     config = load_config()
 
     if args.mode == "train":
-        run_train(config)
+        run_train(config, phase=args.phase)
     elif args.mode == "export":
         run_export(config)
 

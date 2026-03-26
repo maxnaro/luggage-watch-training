@@ -503,11 +503,18 @@ def process_split(
 
     # 1. Split max_samples between OID and COCO by source ratio
     sr = args.source_ratio
-    coco_max = int(args.max_samples / (sr + 1)) if args.max_samples else None
-    oi_max = int(args.max_samples * sr / (sr + 1)) if args.max_samples else None
+    if sr > 0:
+        coco_max = int(args.max_samples / (sr + 1)) if args.max_samples else None
+        oi_max = int(args.max_samples * sr / (sr + 1)) if args.max_samples else None
+    else:
+        coco_max = args.max_samples
+        oi_max = 0
 
     if args.max_samples:
-        print(f"  Source split: COCO={coco_max}, OID={oi_max} (ratio {sr}:1)")
+        if sr > 0:
+            print(f"  Source split: COCO={coco_max}, OID={oi_max} (ratio {sr}:1)")
+        else:
+            print(f"  Source split: COCO={coco_max} (OID disabled)")
 
     # 2. Download COCO with all classes (complete annotations)
     raw_coco = download_and_filter(COCO, split, coco_max, args.min_area, tracker)
@@ -522,12 +529,13 @@ def process_split(
     dataset = tracker.track(COCO.remap_labels(raw_coco))
 
     # 5. Download Open Images with all classes, remap and merge
-    oi_raw = download_and_filter(OPEN_IMAGES, split, oi_max, args.min_area, tracker)
-    print(f"  Remapping Open Images labels → {TARGET_CLASSES} …")
-    oi = tracker.track(OPEN_IMAGES.remap_labels(oi_raw))
-    dataset.merge_samples(oi, key_field="id")
-    print(f"    Merged {len(oi)} Open Images samples")
-    fo.delete_dataset(oi.name)
+    if sr > 0:
+        oi_raw = download_and_filter(OPEN_IMAGES, split, oi_max, args.min_area, tracker)
+        print(f"  Remapping Open Images labels → {TARGET_CLASSES} …")
+        oi = tracker.track(OPEN_IMAGES.remap_labels(oi_raw))
+        dataset.merge_samples(oi, key_field="id")
+        print(f"    Merged {len(oi)} Open Images samples")
+        fo.delete_dataset(oi.name)
 
     # 6. Balance person:luggage ratio (trims excess person-only images)
     print(f"  Balancing classes (target ratio {args.class_ratio}:1) …")
