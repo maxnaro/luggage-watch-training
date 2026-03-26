@@ -119,6 +119,19 @@ OPEN_IMAGES = ZooSource(
     luggage_classes=_OI_LUGGAGE_CLASSES,
 )
 
+SUPPLEMENT_LABEL_ALIASES = {
+    "bag": "luggage",
+    "bags": "luggage",
+    "baggage": "luggage",
+    "backpack": "luggage",
+    "briefcase": "luggage",
+    "handbag": "luggage",
+    "suitcase": "luggage",
+    "human": "person",
+    "people": "person",
+    "pedestrian": "person",
+}
+
 
 # Dataset transforms
 
@@ -243,45 +256,190 @@ def balance_classes(dataset: fo.Dataset, ratio: float, seed: int = 42) -> fo.Dat
         keep_ids.append(sid)
         accumulated += n
 
-    balanced = dataset.select([s.id for s in luggage_view] + keep_ids)
+    balanced_view = dataset.select([s.id for s in luggage_view] + keep_ids)
 
-    total_person = count_label(balanced, "person")
-    total_luggage = count_label(balanced, "luggage")
+    total_person = count_label(balanced_view, "person")
+    total_luggage = count_label(balanced_view, "luggage")
     actual_ratio = total_person / total_luggage if total_luggage else float("inf")
 
-    print(f"    Balanced: {len(balanced)} images, ratio {actual_ratio:.2f}:1")
+    print(f"    Balanced: {len(balanced_view)} images, ratio {actual_ratio:.2f}:1")
 
-    return balanced
+    # Materialise as a dataset so downstream merge/export operations can mutate it.
+    return balanced_view.clone()
+
+
+def _normalise_label(label: str) -> str:
+    return label.strip().strip(",").lower()
+
+
+def _canonicalise_supplement_label(label: str) -> str | None:
+    normalised = _normalise_label(label)
+    if normalised in TARGET_CLASSES:
+        return normalised
+    return SUPPLEMENT_LABEL_ALIASES.get(normalised)
+
+
+def _resolve_supplement_split_path(
+    split_path: str,
+    supplement_dir: Path,
+    yaml_dir: Path,
+) -> str:
+    raw = split_path.replace("\\", "/")
+    candidates = [(yaml_dir / raw).resolve(), (supplement_dir / raw).resolve()]
+
+    trimmed = raw
+    while trimmed.startswith("../"):
+        trimmed = trimmed[3:]
+        candidates.append((supplement_dir / trimmed).resolve())
+
+    for candidate in candidates:
+        if candidate.is_dir():
+            try:
+                rel = candidate.relative_to(supplement_dir)
+                return rel.as_posix()
+            except ValueError:
+                return str(candidate)
+
+    return raw
+
+
+def _prepare_supplement_yaml(
+    supplement_dir: Path,
+    yaml_path: Path,
+    split: str,
+) -> tuple[str, Path]:
+    import yaml
+
+    with open(yaml_path, encoding="utf-8") as f:
+        yaml_cfg = yaml.safe_load(f) or {}
+
+    supp_split = split
+    if split == "val" and "val" not in yaml_cfg and "valid" in yaml_cfg:
+        supp_split = "valid"
+
+    if supp_split not in yaml_cfg:
+        available = [k for k in ("train", "val", "valid", "test") if k in yaml_cfg]
+        raise ValueError(
+            f"Supplement is missing split '{supp_split}'. Available splits: {available}"
+        )
+
+    patched_cfg = dict(yaml_cfg)
+    patched_cfg[supp_split] = _resolve_supplement_split_path(
+        str(yaml_cfg[supp_split]),
+        supplement_dir,
+        yaml_path.parent,
+    )
+
+    names = patched_cfg.get("names")
+    if isinstance(names, dict):
+        patched_cfg["names"] = {
+            key: _normalise_label(str(value)) for key, value in names.items()
+        }
+    elif isinstance(names, list):
+        patched_cfg["names"] = [_normalise_label(str(value)) for value in names]
+
+    temp_yaml_path = supplement_dir / f".luggage-watch-{split}-supplement.yaml"
+    with open(temp_yaml_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(patched_cfg, f, sort_keys=False)
+
+    return supp_split, temp_yaml_path
+
+
+def _normalise_supplement_labels(dataset: fo.Dataset, label_field: str) -> set[str]:
+    invalid_labels = set()
+
+    for sample in dataset.iter_samples(autosave=True, progress=False):
+        labels = getattr(sample, label_field)
+        detections = []
+        for det in labels.detections:
+            mapped = _canonicalise_supplement_label(det.label)
+            if mapped is None:
+                invalid_labels.add(det.label)
+                continue
+            det.label = mapped
+            detections.append(det)
+        labels.detections = detections
+
+    return invalid_labels
 
 
 def merge_supplement(
     dataset: fo.Dataset, supplement_dir: Path, split: str
 ) -> fo.Dataset:
-    """Merge a local YOLOv5-format dataset into the main dataset."""
-    yaml_path = supplement_dir / "dataset.yaml"
-    if not yaml_path.exists():
+    """Merge a local YOLO-format dataset into the main dataset.
+
+    Supports both standard YOLOv5 layout (dataset.yaml) and
+    Roboflow exports (data.yaml with train/valid/test directories).
+    """
+    # Auto-detect YAML file
+    yaml_path = None
+    for name in ("dataset.yaml", "data.yaml"):
+        candidate = supplement_dir / name
+        if candidate.exists():
+            yaml_path = candidate
+            break
+
+    if yaml_path is None:
         raise FileNotFoundError(
-            f"Expected dataset.yaml at {yaml_path}. "
-            f"Ensure the supplement directory is in YOLOv5 format."
+            f"No dataset.yaml or data.yaml found in {supplement_dir}."
         )
 
-    supp_name = f"supplement-{split}-{dataset.name}"
-    supp = fo.Dataset.from_dir(
-        dataset_dir=str(supplement_dir),
-        dataset_type=fo.types.YOLOv5Dataset,
-        split=split,
-        name=supp_name,
-        label_field="ground_truth",
+    supp_split, temp_yaml_path = _prepare_supplement_yaml(
+        supplement_dir, yaml_path, split
     )
 
-    invalid = set(supp.distinct("ground_truth.detections.label")) - set(TARGET_CLASSES)
+    supp_name = f"supplement-{split}-{dataset.name}"
+    try:
+        supp = fo.Dataset.from_dir(
+            dataset_dir=str(supplement_dir),
+            dataset_type=fo.types.YOLOv5Dataset,
+            yaml_path=str(temp_yaml_path),
+            split=supp_split,
+            name=supp_name,
+        )
+    finally:
+        if temp_yaml_path.exists():
+            temp_yaml_path.unlink(missing_ok=True)
+
+    if len(supp) == 0:
+        print(f"    Supplement split '{supp_split}' has 0 samples, skipping merge")
+        fo.delete_dataset(supp_name)
+        return dataset
+
+    # Detect whichever label field FiftyOne created
+    label_field = None
+    for field_name in ("ground_truth", "detections"):
+        if field_name in supp.get_field_schema():
+            label_field = field_name
+            break
+
+    if label_field is None:
+        print(
+            "    Supplement has no detection field, skipping merge. "
+            f"Fields: {list(supp.get_field_schema().keys())}"
+        )
+        fo.delete_dataset(supp_name)
+        return dataset
+
+    invalid = _normalise_supplement_labels(supp, label_field)
     if invalid:
+        fo.delete_dataset(supp_name)
         raise ValueError(
-            f"Supplement contains unknown classes: {invalid}. Expected: {TARGET_CLASSES}"
+            f"Supplement contains unknown classes: {sorted(invalid)}. "
+            f"Expected: {TARGET_CLASSES}"
         )
 
+    # Rename to "ground_truth" if needed so merge aligns with main dataset
+    if label_field != "ground_truth":
+        supp.rename_sample_field(label_field, "ground_truth")
+
+    if not hasattr(dataset, "merge_samples"):
+        dataset = dataset.clone()
+
     before = len(dataset)
-    dataset.merge_samples(supp)
+    # Use sample IDs as merge key because filepath is intentionally non-unique
+    # before export (oversampling duplicates media paths).
+    dataset.merge_samples(supp, key_field="id")
     print(f"    Merged {len(dataset) - before} supplement images")
 
     fo.delete_dataset(supp_name)
@@ -539,7 +697,7 @@ def process_split(
 
     # 6. Balance person:luggage ratio (trims excess person-only images)
     print(f"  Balancing classes (target ratio {args.class_ratio}:1) …")
-    balanced = balance_classes(dataset, ratio=args.class_ratio, seed=args.seed)
+    balanced = tracker.track(balance_classes(dataset, ratio=args.class_ratio, seed=args.seed))
 
     # 7. Merge local supplement (after balancing — preserves all supplement data)
     if args.supplement:
