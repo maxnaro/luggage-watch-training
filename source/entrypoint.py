@@ -104,8 +104,15 @@ def run_export(config: dict) -> None:
     out = export_cfg.get("out", "/app/model/model.onnx")
 
     if not weights:
-        # Auto-resolve from training run name
-        run_name = config.get("train", {}).get("name", "exp")
+        # Auto-resolve from training run name (last phase or "train" key)
+        run_name = "exp"
+        if "train" in config:
+            run_name = config["train"].get("name", run_name)
+        else:
+            # Use the last phase key
+            phase_keys = [k for k in config if k.startswith("phase")]
+            if phase_keys:
+                run_name = config[phase_keys[-1]].get("name", run_name)
         weights = f"/app/runs/detect/{run_name}/weights/best.pt"
 
     if not Path(weights).exists():
