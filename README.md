@@ -13,13 +13,21 @@ docker desktop start
 # 1. Build the image
 docker build -t luggage-watch-training .
 
-# 2. Train
+# 2. Train (single-phase config uses "train" key automatically)
 docker run --gpus all --ipc=host --rm -it `
   -v "${PWD}\source\config.json:/app/config.json:ro" `
   -v "my-dataset:/app/data" `
   -v "${PWD}\runs:/app/runs" `
   -v "${PWD}\model:/app/model" `
   luggage-watch-training train
+
+# 2b. Or select a phase for multi-phase configs
+docker run --gpus all --ipc=host --rm -it `
+  -v "${PWD}\source\config.json:/app/config.json:ro" `
+  -v "my-dataset:/app/data" `
+  -v "${PWD}\runs:/app/runs" `
+  -v "${PWD}\model:/app/model" `
+  luggage-watch-training train --phase phase1
 
 # 3. Export to ONNX
 docker run --gpus all --rm -it `
@@ -38,54 +46,73 @@ docker run --gpus all --rm -it `
 
 ## Configuration
 
-All parameters live in `source/config.json`:
+The config supports **single-phase** (one `train` key) or **multi-phase** training (multiple `phase*` keys). All train parameters are passed directly to `YOLO.train()`.
+
+### Single-phase config
 
 ```json
 {
     "train": {
+        "model": "yolo26s.pt",
         "data": "/app/data/dataset.yaml",
-        "model": "/app/runs/detect/yolo26s_1280_020326/weights/best.pt",
-        "epochs": 100,
-        "patience": 30,
-        "batch": 0.8,
-        "imgsz": 1280,
-        "optimizer": "AdamW",
-        "lr0": 0.0008,
-        "lrf": 0.01,
-        "warmup_epochs": 3.0,
-        "freeze": 10,
-        "workers": 8,
-        "cache": "disk",
-        "seed": 0,
-        "resume": true,
-        "exist_ok": false,
-        "save_period": -1,
-        "close_mosaic": 15,
-        "iou": 0.8,
-        "label_smoothing": 0.05,
-        "cls": 0.8,
-        "scale": 0.7,
-        "device": "0",
-        "name": "yolo26s_1280_020326"
+        "epochs": 150,
+        "imgsz": 640,
+        "name": "my_run"
     },
-    "export": {
-        "format": "onnx",
-        "imgsz": 1280,
-        "opset": 12,
-        "simplify": true,
-        "dynamic": false,
-        "half": true,
-        "int8": false,
-        "batch": 1,
-        "out": "/app/model/yolo26s_1280_020326.onnx"
-    }
+    "export": { ... }
 }
 ```
 
+### Multi-phase config
+
+Use named `phase*` keys for staged training (e.g. baseline then fine-tune). Phase 2 references phase 1's output weights:
+
+```json
+{
+    "phase1_coco_baseline": {
+        "model": "yolo26s.pt",
+        "data": "/app/data/dataset.yaml",
+        "epochs": 150,
+        "freeze": 0,
+        "lr0": 0.0008,
+        "name": "coco_baseline_26s"
+    },
+    "phase2_finetune": {
+        "model": "/app/runs/detect/coco_baseline_26s/weights/best.pt",
+        "data": "/app/data/dataset.yaml",
+        "epochs": 80,
+        "freeze": 10,
+        "lr0": 0.0002,
+        "name": "finetune_mixed_26s"
+    },
+    "export": { ... }
+}
+```
+
+Select the phase at runtime with `--phase`:
+
+```bash
+# Phase 1: train baseline
+docker run --gpus all --ipc=host --rm -it \
+  -v ./source/config.json:/app/config.json:ro \
+  -v coco-data:/app/data \
+  -v ./runs:/app/runs \
+  luggage-watch-training train --phase phase1
+
+# Phase 2: fine-tune (same runs volume, swap data volume)
+docker run --gpus all --ipc=host --rm -it \
+  -v ./source/config.json:/app/config.json:ro \
+  -v mixed-data:/app/data \
+  -v ./runs:/app/runs \
+  luggage-watch-training train --phase phase2
+```
+
+Prefix matching is supported — `--phase phase1` matches `phase1_coco_baseline`. If `--phase` is omitted, the `train` key is used (or the first `phase*` key).
+
 | Section       | Purpose                                                                                                                  |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `train.*`     | Passed directly to `YOLO.train()` — add any [Ultralytics parameter](https://docs.ultralytics.com/modes/train/#arguments) |
-| `export.*`    | Passed directly to `YOLO.export()` — `weights` auto-resolved from `train.name` if omitted                                |
+| `train` or `phase*` | Passed directly to `YOLO.train()` — add any [Ultralytics parameter](https://docs.ultralytics.com/modes/train/#arguments) |
+| `export`      | Passed directly to `YOLO.export()` — `weights` auto-resolved from `train.name` if omitted                                |
 
 ### Data Layout
 

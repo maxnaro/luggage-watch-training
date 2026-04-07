@@ -18,3 +18,5 @@ wandb/
 
 # Large/local data
 dataset/
+
+.claude
