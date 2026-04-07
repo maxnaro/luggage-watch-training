@@ -1,5 +1,5 @@
 {
-    "train": {
+    "phase1_train": {
         "data": "/app/data/dataset.yaml",
         "model": "yolo26s.pt",
         "epochs": 200,
@@ -32,13 +32,55 @@
         "box": 7.5,
         "name": "mixed_full_26s"
     },
+    "phase2_tune": {
+        "data": "/app/data/dataset.yaml",
+        "model": "/app/runs/detect/mixed_full_26s/weights/best.pt",
+        "epochs": 100,
+        "patience": 25,
+        "batch": 0.95,
+        "imgsz": 640,
+        "optimizer": "AdamW",
+        "lr0": 0.00008,
+        "lrf": 0.002,
+        "weight_decay": 0.001,
+        "warmup_epochs": 5.0,
+        "freeze": 12,
+        "workers": 8,
+        "cache": "ram",
+        "seed": 0,
+        "resume": false,
+        "exist_ok": false,
+        "save_period": -1,
+        "close_mosaic": 25,
+        "iou": 0.6,
+        "nbs": 64,
+        "label_smoothing": 0.01,
+        "cls": 1.2,
+        "scale": 0.08,
+        "device": "0",
+        "perspective": 0.0002,
+        "shear": 0.5,
+        "degrees": 5.0,
+        "copy_paste": 0.0,
+        "multi_scale": false,
+        "flipud": 0.0,
+        "mosaic": 0.5,
+        "mixup": 0.0,
+        "box": 9.0,
+        "dropout": 0.1,
+        "name": "tuned_26s"
+    },
     "export": {
-        "size": [640, 640],
+        "weights": "/app/runs/detect/tuned_26s/weights/best.pt",
+        "size": [
+            640,
+            640
+        ],
         "opset": 18,
         "simplify": true,
         "dynamic": false,
         "batch": 1,
         "half": true,
-        "out": "/app/model/luggage_detection.onnx"
+        "out": "/app/model/tuned.onnx"
     }
 }
