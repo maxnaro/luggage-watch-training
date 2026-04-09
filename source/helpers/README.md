@@ -4,7 +4,7 @@ Scripts for downloading, preparing, and loading the training dataset.
 
 ## Prerequisites
 
-Install the Python dependencies (from the `training/` directory):
+Install the Python dependencies:
 
 ```bash
 pip install -r requirements.txt
